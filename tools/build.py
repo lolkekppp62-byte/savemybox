@@ -51,7 +51,7 @@ def main():
         with zipfile.ZipFile(source) as z: z.extractall(upstream)
     aar=ROOT/'app/libs/libbox.aar'
     stamp=aar.with_suffix('.json')
-    tags='with_gvisor,with_quic,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0'
+    tags='with_gvisor,with_quic,with_utls,with_clash_api'
     expected={'commit':COMMIT,'tags':tags,'api':26,'gomobile':'v0.1.12'}
     valid=False
     if aar.exists() and stamp.exists():
