@@ -20,10 +20,10 @@ def check():
     text=subprocess.run([str(java),'-version'],capture_output=True,text=True).stderr
     if not re.search(r'version "17\.',text): raise RuntimeError('Нужен JDK 17. Укажите JAVA_HOME. Найдено: '+text.splitlines()[0])
     if os.environ.get('JAVA_HOME'): os.environ['PATH']=str(pathlib.Path(os.environ['JAVA_HOME'])/'bin')+os.pathsep+os.environ['PATH']
-    if not shutil.which('go'): raise RuntimeError('Установите Go >= 1.22.0 (go.dev/dl), затем откройте новый терминал.')
+    if not shutil.which('go'): raise RuntimeError('Установите Go >= 1.23.0 (go.dev/dl), затем откройте новый терминал.')
     version=subprocess.check_output(['go','version'],text=True)
     parts=re.search(r'go(\d+)\.(\d+)(?:\.(\d+))?',version)
-    if not parts or tuple(int(x or 0) for x in parts.groups())<(1,22,0): raise RuntimeError('Нужен Go >= 1.22.0')
+    if not parts or tuple(int(x or 0) for x in parts.groups())<(1,23,0): raise RuntimeError('Нужен Go >= 1.23.0')
     sdk=os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT')
     if not sdk: raise RuntimeError('Укажите ANDROID_HOME: каталог Android SDK с platform 35 и NDK '+NDK)
     sdk=pathlib.Path(sdk)

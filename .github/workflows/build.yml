@@ -8,7 +8,7 @@ jobs:
       - uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin' }
       - uses: actions/setup-go@v5
-        with: { go-version: '1.22', check-latest: true }
+        with: { go-version: 'stable', check-latest: true }
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
       - name: Setup Android SDK
