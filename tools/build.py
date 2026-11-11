@@ -4,7 +4,7 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 CORE='v1.14.4'
 COMMIT='c005f35300ce76427dc285481ec5695f5b179cd2'
 GRADLE='8.11.1'
-NDK='28.2.13676358'
+NDK='26.1.10909125'
 def run(args,cwd=ROOT,env=None):
     print('+ '+' '.join(map(str,args)),flush=True)
     subprocess.run(list(map(str,args)),cwd=cwd,env=env,check=True)
@@ -20,14 +20,14 @@ def check():
     text=subprocess.run([str(java),'-version'],capture_output=True,text=True).stderr
     if not re.search(r'version "17\.',text): raise RuntimeError('Нужен JDK 17. Укажите JAVA_HOME. Найдено: '+text.splitlines()[0])
     if os.environ.get('JAVA_HOME'): os.environ['PATH']=str(pathlib.Path(os.environ['JAVA_HOME'])/'bin')+os.pathsep+os.environ['PATH']
-    if not shutil.which('go'): raise RuntimeError('Установите Go >= 1.25.5 (go.dev/dl), затем откройте новый терминал.')
+    if not shutil.which('go'): raise RuntimeError('Установите Go >= 1.22.0 (go.dev/dl), затем откройте новый терминал.')
     version=subprocess.check_output(['go','version'],text=True)
     parts=re.search(r'go(\d+)\.(\d+)(?:\.(\d+))?',version)
-    if not parts or tuple(int(x or 0) for x in parts.groups())<(1,25,5): raise RuntimeError('Нужен Go >= 1.25.5')
+    if not parts or tuple(int(x or 0) for x in parts.groups())<(1,22,0): raise RuntimeError('Нужен Go >= 1.22.0')
     sdk=os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT')
-    if not sdk: raise RuntimeError('Укажите ANDROID_HOME: каталог Android SDK с platform 36 и NDK '+NDK)
+    if not sdk: raise RuntimeError('Укажите ANDROID_HOME: каталог Android SDK с platform 35 и NDK '+NDK)
     sdk=pathlib.Path(sdk)
-    for item in ['platforms/android-36/android.jar','ndk/'+NDK]:
+    for item in ['platforms/android-35/android.jar','ndk/'+NDK]:
         if not (sdk/item).exists(): raise RuntimeError('Установите через SDK Manager: '+item)
     os.environ['ANDROID_HOME']=str(sdk);os.environ['ANDROID_NDK_HOME']=str(sdk/'ndk'/NDK)
     return sdk
