@@ -65,7 +65,7 @@ def main():
         run([mobile,'init'],core,env)
         aar.parent.mkdir(parents=True,exist_ok=True)
         # Только требуемые транспорты; не включаем Naive/SSH/Tailscale с лишними нативными зависимостями.
-        run([mobile,'bind','-v','-o',aar,'-target','android','-androidapi','26','-javapkg=io.nekohasekai','-libname=box','-tags',tags,'-trimpath','-buildvcs=false','-ldflags',f'-X github.com/sagernet/sing-box/constant.Version={CORE[1:]}','./experimental/libbox'],core,env)
+        run([mobile,'bind','-v','-o',aar,'-target','android','-androidapi','26','-javapkg=io.nekohasekai','-libname=box','-tags',tags,'-trimpath','-buildvcs=false','-ldflags',f'-checklinkname=0 -X github.com/sagernet/sing-box/constant.Version={CORE[1:]}','./experimental/libbox'],core,env)
         stamp.write_text(json.dumps(dict(expected,sha256=hashlib.sha256(aar.read_bytes()).hexdigest()),indent=2))
     launcher=gradle/'bin'/('gradle.bat' if os.name=='nt' else 'gradle')
     if os.name!='nt': launcher.chmod(0o755)
