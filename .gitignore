@@ -1,0 +1,11 @@
+.gradle/
+.tools/
+.upstream/
+**/build/
+local.properties
+app/libs/*.aar
+app/libs/libbox.json
+SavemyBox-source.zip
+*.jks
+*.keystore
+__pycache__/
