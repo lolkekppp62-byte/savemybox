@@ -16,11 +16,11 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 }
 @Serializable data class Subscription(
     val id: String = java.util.UUID.randomUUID().toString(),
-    val name: String,
+    val name: String = "",
     val url: String,
     val enabled: Boolean = true,
     val lastUpdated: Long = 0
-))
+)
 @Serializable data class Settings(
     val theme: String = "system", val accent: Long = 0xFF63D6C5,
     val russianServices: Boolean = false,
