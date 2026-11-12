@@ -103,7 +103,19 @@ import java.util.Date
             }
         }
         if(importing) ImportDialog(onDismiss={importing=false}) { text,mark -> action {
-            val nodes=withContext(Dispatchers.Default) { Importer.parse(text,mark) }; app.repository.add(nodes);importing=false
+            val source=text.trim()
+            val content=if(source.startsWith("https://",ignoreCase=true)) withContext(Dispatchers.IO) {
+                val url=java.net.URL(source)
+                require(url.protocol.equals("https",true)) { "Поддерживаются только HTTPS-ссылки" }
+                val connection=url.openConnection().apply { connectTimeout=15_000;readTimeout=30_000;setRequestProperty("User-Agent","SavemyBox/1.0") }
+                connection.getInputStream().use { stream ->
+                    val bytes=stream.readNBytes(1_000_001)
+                    require(bytes.size<=1_000_000) { "Список слишком большой (максимум 1 МБ)" }
+                    bytes.decodeToString()
+                }
+            } else source
+            val nodes=withContext(Dispatchers.Default) { Importer.parse(content,mark) }
+            app.repository.add(nodes);importing=false
             app.journal.add("Добавлено узлов: ${nodes.size}");app.engine.applySettings()
         } }
         error?.let { text -> AlertDialog(onDismissRequest={error=null},title={Text("Не получилось")},text={Text(text)},confirmButton={TextButton(onClick={error=null}) { Text("Понятно") }}) }
@@ -131,8 +143,8 @@ import java.util.Date
 @Composable private fun ImportDialog(onDismiss:()->Unit,onImport:(String,Mark)->Unit) {
     var text by remember { mutableStateOf("") };var mark by remember { mutableStateOf(Mark.NONE) }
     AlertDialog(onDismissRequest=onDismiss,title={Text("Добавить узлы")},text={Column {
-        Text("Ссылки по одной на строку или outbound JSON. Ключи сохраняются зашифрованными.")
-        OutlinedTextField(value=text,onValueChange={text=it},label={Text("Ссылка или JSON")},modifier=Modifier.fillMaxWidth().heightIn(max=220.dp),minLines=3)
+        Text("Вставьте HTTPS-ссылку на список, ссылки узлов по одной на строку или outbound JSON. Ключи сохраняются зашифрованными.")
+        OutlinedTextField(value=text,onValueChange={text=it},label={Text("HTTPS-ссылка, ссылки узлов или JSON")},modifier=Modifier.fillMaxWidth().heightIn(max=220.dp),minLines=3)
         Row { Mark.entries.forEach { m -> FilterChip(selected=m==mark,onClick={mark=m},label={Text(if(m==Mark.NONE) "Обычный" else m.name)}) } }
     }},confirmButton={TextButton(onClick={onImport(text,mark)},enabled=text.isNotBlank()) { Text("Добавить") }},dismissButton={TextButton(onClick=onDismiss) { Text("Отмена") }})
 }

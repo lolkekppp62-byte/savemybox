@@ -19,6 +19,16 @@ class CoreTest {
     @Test fun ipv6() { assertEquals("trojan",Importer.parse("trojan://p@[2001:db8::1]:443").single().protocol) }
     @Test fun malformedDoesNotExposeSecret() { listOf("vless://secret@example.com:99999", "{broken-secret}","trojan://secret@example.com:443?plugin=bad").forEach { raw -> try { Importer.parse(raw);fail("must reject") } catch(e:IllegalArgumentException) { assertFalse(e.message.orEmpty().contains("secret")) } } }
     @Test fun unsafeLinkRejected() { assertThrows(IllegalArgumentException::class.java) { Importer.parse("trojan://p@example.com:443?insecure=1") } }
+    @Test fun vlessXhttpSubscriptionLine() {
+        val n=Importer.parse("# comment\nvless://$uuid@example.com:443?security=tls&sni=accounts.example.com&encryption=none&insecure=0&allowInsecure=0&type=xhttp&host=cdn.example.com&path=%2F&mode=auto&ed=2048&fp=chrome#XHTTP").single()
+        assertEquals("XHTTP",n.name)
+        val out=codec.parseToJsonElement(n.outbound).jsonObject
+        assertEquals("http",out["transport"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("cdn.example.com",out["transport"]!!.jsonObject["host"]!!.jsonArray.single().jsonPrimitive.content)
+    }
+    @Test fun listIgnoresCommentsAndEmptyLines() {
+        assertEquals(2,Importer.parse("# subscription header\n\nvless://$uuid@example.com:443\n# another\nvless://$uuid@example.net:443").size)
+    }
     @Test fun jsonRoundTrip() { val original="""{"type":"trojan","tag":"x","server":"example.com","server_port":443,"password":"x","tls":{"enabled":true}}""";val n=Importer.parse(original,Mark.WL).single();assertEquals(Mark.WL,n.mark);assertEquals("x",n.name) }
     @Test fun intervalBounds() { assertEquals(45L,Interval.parse("45","minutes"));assertEquals(4320L,Interval.parse("3","days"));assertThrows(IllegalArgumentException::class.java) { Interval.parse("14","minutes") };assertThrows(IllegalArgumentException::class.java) { Interval.parse("999999999999999","days") } }
     @Test fun blacklistNeverSelected() {

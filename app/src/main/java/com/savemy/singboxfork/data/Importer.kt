@@ -22,7 +22,7 @@ object Importer {
                 val root = codec.parseToJsonElement(input)
                 val list = if(root is JsonArray) root.toList() else listOf(root)
                 list.map { null to it.jsonObject }
-            } else input.lines().filter { it.isNotBlank() }.map { link(it.trim()) }
+            } else input.lines().map(String::trim).filter { it.isNotEmpty() && !it.startsWith("#") }.map { link(it) }
             require(entries.isNotEmpty()) { "Вставьте ссылку или JSON узла" }
             require(entries.size <= 200) { "За один раз можно добавить не более 200 узлов" }
             return entries.map { (name, value) ->
@@ -71,7 +71,7 @@ object Importer {
         val type = when(scheme) { "ss" -> "shadowsocks"; "hy2" -> "hysteria2"; else -> scheme }
         require(type in setOf("vless","trojan","shadowsocks","hysteria2","tuic")) { "Этот формат ссылки не поддерживается; используйте outbound JSON" }
         val q = u.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() }.associate { val a=it.split('=',limit=2); decode(a[0]) to decode(a.getOrElse(1){""}) }
-        val known = setOf("security","sni","peer","type","host","path","serviceName","flow","fp","pbk","sid","alpn","insecure","allowInsecure","obfs","obfs-password","congestion_control","udp_relay_mode","encryption")
+        val known = setOf("security","sni","peer","type","host","path","serviceName","flow","fp","pbk","sid","alpn","insecure","allowInsecure","obfs","obfs-password","congestion_control","udp_relay_mode","encryption","mode","extra","ed","packetEncoding","headerType","fragment","fm")
         require(q.keys.all { it in known }) { "Параметр ссылки не поддерживается; используйте outbound JSON" }
         require(q["insecure"] !in listOf("1","true") && q["allowInsecure"] !in listOf("1","true")) { "Не разрешён импорт ссылки с отключённой проверкой сертификата" }
         require(q["encryption"] == null || q["encryption"] == "none") { "Не поддерживается encryption; используйте JSON" }
@@ -98,6 +98,8 @@ object Importer {
             "tcp" -> Unit
             "ws" -> m["transport"]=obj("type" to p("ws"),"path" to p(q["path"] ?: "/"),"headers" to obj("Host" to p(q["host"] ?: host)))
             "grpc" -> m["transport"]=obj("type" to p("grpc"),"service_name" to p(q["serviceName"].orEmpty()))
+            // XHTTP-ссылки принимаются как HTTP transport; extra/mode/ed из сторонней схемы не переносятся.
+            "xhttp" -> m["transport"]=obj("type" to p("http"),"path" to p(q["path"] ?: "/"),"host" to JsonArray(listOf(p(q["host"] ?: host))))
             else -> error("Не поддерживается транспорт; используйте JSON")
         }
         q["obfs"]?.let { require(type=="hysteria2" && it=="salamander");m["obfs"]=obj("type" to p(it),"password" to p(q["obfs-password"] ?: error("Не задан пароль obfs"))) }
