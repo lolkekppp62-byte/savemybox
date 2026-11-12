@@ -77,8 +77,8 @@ object Importer {
         val type = when(scheme) { "ss" -> "shadowsocks"; "hy2" -> "hysteria2"; else -> scheme }
         require(type in setOf("vless","trojan","shadowsocks","hysteria2","tuic")) { "Этот формат ссылки не поддерживается; используйте outbound JSON" }
         val q = u.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() }.associate { val a=it.split('=',limit=2); decode(a[0]) to decode(a.getOrElse(1){""}) }
-        val known = setOf("security","sni","peer","type","host","path","serviceName","flow","fp","pbk","sid","alpn","insecure","allowInsecure","obfs","obfs-password","congestion_control","udp_relay_mode","encryption","mode","extra","ed","packetEncoding","headerType","fragment","fm")
-        require(q.keys.all { it in known }) { "Параметр ссылки не поддерживается; используйте outbound JSON" }
+        val known = setOf("security","sni","peer","type","host","path","serviceName","flow","fp","pbk","sid","alpn","insecure","allowInsecure","obfs","obfs-password","congestion_control","udp_relay_mode","encryption","mode","extra","ed","packetEncoding","headerType","fragment","fm","spx","ais","multiMode","mport","random")
+        // Неизвестные параметры игнорируются, чтобы не отбрасывать рабочие ссылки из подписок
         require(q["insecure"] !in listOf("1","true") && q["allowInsecure"] !in listOf("1","true")) { "Не разрешён импорт ссылки с отключённой проверкой сертификата" }
         require(q["encryption"] == null || q["encryption"] == "none") { "Не поддерживается encryption; используйте JSON" }
         val host = u.host?.removePrefix("[")?.removeSuffix("]") ?: error("Не задан сервер")
