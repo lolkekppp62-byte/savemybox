@@ -21,7 +21,13 @@ android {
         checkReleaseBuilds = false
     }
 
-    kotlinOptions { jvmTarget = "17" }
+    compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+kotlinOptions {
+    jvmTarget = "17"
+}
     packaging { jniLibs.useLegacyPackaging = false }
     testOptions { unitTests.isReturnDefaultValues = true }
 }
