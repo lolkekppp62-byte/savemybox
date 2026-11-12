@@ -43,7 +43,7 @@ import kotlinx.coroutines.withContext
             val ignoring = pm.isIgnoringBatteryOptimizations(context.packageName)
             if (!ignoring) {
                 OutlinedButton(onClick={
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                         Uri.parse("package:${context.packageName}"))
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(intent)
