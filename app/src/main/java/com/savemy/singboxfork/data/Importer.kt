@@ -22,8 +22,14 @@ object Importer {
                 val root = codec.parseToJsonElement(input)
                 val list = if(root is JsonArray) root.toList() else listOf(root)
                 list.map { null to it.jsonObject }
-            } else input.lines().map(String::trim).filter { it.isNotEmpty() && !it.startsWith("#") }.map { link(it) }
-            require(entries.isNotEmpty()) { "Вставьте ссылку или JSON узла" }
+            } else {
+                val lines = input.lines().map(String::trim).filter { it.isNotEmpty() && !it.startsWith("#") }
+                require(lines.size <= 1000) { "В списке слишком много строк (максимум 1000)" }
+                // Подписки часто содержат экспериментальные схемы: добавляем распознанные узлы,
+                // а несовместимые строки не должны отменять весь импорт.
+                lines.mapNotNull { line -> runCatching { link(line) }.getOrNull() }
+            }
+            require(entries.isNotEmpty()) { "Не найдено поддерживаемых узлов в списке" }
             require(entries.size <= 200) { "За один раз можно добавить не более 200 узлов" }
             return entries.map { (name, value) ->
                 val type = value["type"]?.jsonPrimitive?.content ?: error("В JSON отсутствует type")
