@@ -24,6 +24,18 @@ object Importer {
                 list.map { null to it.jsonObject }
             } else {
                 val lines = input.lines().map(String::trim).filter { it.isNotEmpty() && !it.startsWith("#") }
+            require(lines.size <= 1000) { "В списке слишком много строк (максимум 1000)" }
+            // Поддержка raw outbound JSON строк: если строка начинается с '{', считаем её JSON-объектом
+            val entries = lines.mapNotNull { line ->
+                runCatching {
+                    if (line.startsWith("{")) {
+                        // Возвращаем без имени, только объект
+                        null to JsonObject(codec.parseToJsonElement(line).jsonObject)
+                    } else {
+                        link(line)
+                    }
+                }.getOrNull()
+            }
                 require(lines.size <= 1000) { "В списке слишком много строк (максимум 1000)" }
                 // Подписки часто содержат экспериментальные схемы: добавляем распознанные узлы,
                 // а несовместимые строки не должны отменять весь импорт.
