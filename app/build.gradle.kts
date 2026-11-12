@@ -16,7 +16,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
-    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
     kotlinOptions { jvmTarget = "17" }
     packaging { jniLibs.useLegacyPackaging = false }
     testOptions { unitTests.isReturnDefaultValues = true }

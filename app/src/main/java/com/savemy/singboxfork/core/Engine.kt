@@ -59,7 +59,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
         if(!s.adaptiveMtu) return s.mtu
         val cm=context.getSystemService(ConnectivityManager::class.java)
         val m=cm.allNetworks.filter { cm.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)==true }
-            .mapNotNull { cm.getLinkProperties(it)?.mtu?.takeIf { n -> n>0 } }.minOrNull() ?: 1500
+            .mapNotNull { if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) cm.getLinkProperties(it)?.mtu?.takeIf { n -> n>0 } else null }.minOrNull() ?: 1500
         return (m-100).coerceIn(1280,minOf(s.mtu,1500))
     }
     private fun closeCore() {
