@@ -29,6 +29,11 @@ class CoreTest {
     @Test fun listIgnoresCommentsAndEmptyLines() {
         assertEquals(2,Importer.parse("# subscription header\n\nvless://$uuid@example.com:443\n# another\nvless://$uuid@example.net:443").size)
     }
+    @Test fun subscriptionSkipsUnsupportedAndMalformedRows() {
+        val imported=Importer.parse("# list\\nvless://$uuid@example.com:443?security=tls&type=xhttp&host=cdn.example.com&extra={\\\"mux\\\":true}#XHTTP\\nvless://bad@example.net:443?fragment=3,1,tlshello,0-5#unsupported\\nnot-a-node")
+        assertEquals(1,imported.size)
+        assertEquals("XHTTP",imported.single().name)
+    }
     @Test fun jsonRoundTrip() { val original="""{"type":"trojan","tag":"x","server":"example.com","server_port":443,"password":"x","tls":{"enabled":true}}""";val n=Importer.parse(original,Mark.WL).single();assertEquals(Mark.WL,n.mark);assertEquals("x",n.name) }
     @Test fun intervalBounds() { assertEquals(45L,Interval.parse("45","minutes"));assertEquals(4320L,Interval.parse("3","days"));assertThrows(IllegalArgumentException::class.java) { Interval.parse("14","minutes") };assertThrows(IllegalArgumentException::class.java) { Interval.parse("999999999999999","days") } }
     @Test fun blacklistNeverSelected() {

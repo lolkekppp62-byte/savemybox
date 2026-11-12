@@ -108,11 +108,14 @@ import java.util.Date
                 val url=java.net.URL(source)
                 require(url.protocol.equals("https",true)) { "Поддерживаются только HTTPS-ссылки" }
                 val connection=url.openConnection().apply { connectTimeout=15_000;readTimeout=30_000;setRequestProperty("User-Agent","SavemyBox/1.0") }
-                connection.getInputStream().use { stream ->
+                val raw=connection.getInputStream().use { stream ->
                     val bytes=stream.readNBytes(1_000_001)
                     require(bytes.size<=1_000_000) { "Список слишком большой (максимум 1 МБ)" }
                     bytes.decodeToString()
                 }
+                // Пробуем Base64 (стандартные подписки), иначе берём как есть
+                runCatching { String(java.util.Base64.getDecoder().decode(raw.trim())) }
+                    .getOrElse { runCatching { String(java.util.Base64.getMimeDecoder().decode(raw.trim())) }.getOrElse { raw } }
             } else source
             val nodes=withContext(Dispatchers.Default) { Importer.parse(content,mark) }
             app.repository.add(nodes);importing=false
