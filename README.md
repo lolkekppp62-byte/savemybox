@@ -1,4 +1,4 @@
-# Савеми Бокс
+# savemybox
 
 Независимый Android-клиент на libbox sing-box 1.14.4 с русским интерфейсом. Пакет `com.savemy.singboxfork`. Это новый интерфейс и адаптер libbox по архитектуре SFA, а не копия полного репозитория SFA. Не связан с SagerNet.
 
