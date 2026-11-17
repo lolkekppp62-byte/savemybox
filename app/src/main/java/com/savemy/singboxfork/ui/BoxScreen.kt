@@ -76,7 +76,7 @@ import java.util.Date
         Scaffold(containerColor = Color.Transparent, topBar = {
             TopAppBar(title = {
                 Column {
-                    Text(if (page.isEmpty()) "Савеми Бокс" else page, fontWeight = FontWeight.Bold)
+                    Text(if (page.isEmpty()) "SaveMyBox" else page, fontWeight = FontWeight.Bold)
                     if (page.isEmpty()) Text("Ваш маршрут. Ваши правила.", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
                 }
             }, actions = {
@@ -103,7 +103,7 @@ import java.util.Date
                     "Домены" -> RussianListScreen(data.settings, { transform ->
                         action { app.repository.updateSettings(transform);app.engine.applySettings() }
                     }, { page = "" })
-                    "Подписки" -> SubscriptionScreen(context, data.settings,
+                    "Подписки" -> SubscriptionScreen(context, data.settings, data.nodes,
                         onAdd = { sub -> action {
                             app.repository.updateSettings { it.copy(subscriptions = it.subscriptions + sub) }
                             SubscriptionWorker.schedule(context, sub)
@@ -119,17 +119,20 @@ import java.util.Date
                             SubscriptionWorker.cancel(context, id)
                         } },
                         onRefresh = { id -> action { SubscriptionWorker.refreshNow(context, id) } },
+                        onRefreshAll = { action { SubscriptionWorker.refreshAllNow(context, data.settings.subscriptions) } },
                         onImport = { raw -> action {
                             val nodes = withContext(Dispatchers.Default) { Importer.parse(raw) }
                             app.repository.add(nodes);app.engine.applySettings()
                             app.journal.add("Добавлено узлов: ${nodes.size}")
                         } },
+                        onCheck = { scan() },
                         back = { page = "" })
                     else -> if (tab == 0) MainPane(data, connection, progress, live, checking, loadError,
                         onToggle = { if (connected) onDisconnect() else onConnect() },
                         onScan = { scan() },
                         onServers = { sheet = true },
-                        onRefreshSubs = { refreshSubscriptions(context, app) })
+                        onRefreshSubs = { refreshSubscriptions(context, app) },
+                        onCheckMode = { mode -> action { app.repository.updateSettings { it.copy(checkMode = mode) } } })
                     else SettingsScreen(data, change = { transform ->
                         action {
                             val old = app.repository.state.value.settings
@@ -174,6 +177,8 @@ import java.util.Date
             onDelete = { node -> action { app.repository.remove(node.id);app.engine.applySettings() } },
             onCheckMany = { ids -> scanNodes(ids) },
             onDeleteMany = { ids -> action { app.repository.removeAll(ids);app.engine.applySettings() } },
+            onPingFilter = { value -> action { app.repository.updateSettings { it.copy(pingFilter = value) } } },
+            onSort = { value -> action { app.repository.updateSettings { it.copy(nodeSort = value) } } },
             onRefreshSub = { refreshSubscriptions(context, app) },
             onOpenSettings = { sheet = false;tab = 1 })
     }
@@ -181,13 +186,14 @@ import java.util.Date
 
 @Composable private fun MainPane(data: AppData, connection: ConnectionState, progress: CheckProgress?, live: Map<String, NodeResult>,
                                 checking: Boolean, loadError: String?, onToggle: () -> Unit, onScan: () -> Unit,
-                                onServers: () -> Unit, onRefreshSubs: () -> Unit) {
+                                onServers: () -> Unit, onRefreshSubs: () -> Unit, onCheckMode: (CheckMode) -> Unit) {
     val active = data.nodes.firstOrNull { it.id == connection.activeId }
     val sub = data.settings.subscriptions.firstOrNull { it.enabled } ?: data.settings.subscriptions.firstOrNull()
     val subNodes = sub?.let { s -> data.nodes.count { it.id.startsWith("${s.id}::") } } ?: data.nodes.size
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ConnectHero(connection, checking, onToggle, onScan)
+        CheckModeRow(data.settings.checkMode, onCheckMode)
         NodePlate(active, live[active?.id], onServers)
         SubscriptionCard(sub, subNodes, onRefreshSubs, onServers)
         if (checking) ProgressStrip(progress)
@@ -233,6 +239,24 @@ import java.util.Date
                 Spacer(Modifier.width(6.dp))
                 Text(if (checking) "Проверяем…" else "Проверить узлы")
             }
+        }
+    }
+}
+
+/** Переключатель перед проверкой: быстрая (по умолчанию) или точная для медленных сетей. */
+@Composable private fun CheckModeRow(mode: CheckMode, onMode: (CheckMode) -> Unit) {
+    Surface(shape = Palette.CardShape, color = Palette.CardFill, border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Проверка узлов", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
+                Text(
+                    if (mode == CheckMode.FAST) "Быстрая · 20 потоков, 1.5 / 2 с" else "Точная · 3.5 / 4 с",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.TextMuted
+                )
+            }
+            FilterChip(mode == CheckMode.FAST, { onMode(CheckMode.FAST) }, label = { Text("Быстрая") })
+            Spacer(Modifier.width(6.dp))
+            FilterChip(mode == CheckMode.PRECISE, { onMode(CheckMode.PRECISE) }, label = { Text("Точная") })
         }
     }
 }
@@ -286,18 +310,21 @@ import java.util.Date
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable private fun ServersSheet(data: AppData, connection: ConnectionState, progress: CheckProgress?, live: Map<String, NodeResult>,
                                     checking: Boolean, onDismiss: () -> Unit, onAdd: () -> Unit, onScan: () -> Unit,
                                     onFilter: (NodeFilter) -> Unit, onSelect: (Node) -> Unit, onCheck: (String) -> Unit,
                                     onMark: (Node, Mark) -> Unit, onDelete: (Node) -> Unit, onRefreshSub: () -> Unit,
                                     onCheckMany: (Set<String>) -> Unit, onDeleteMany: (Set<String>) -> Unit,
+                                    onPingFilter: (PingFilterState) -> Unit, onSort: (NodeSortState) -> Unit,
                                     onOpenSettings: () -> Unit) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var pendingDelete by remember { mutableStateOf<Node?>(null) }
     // Долгое нажатие включает режим выделения: несколько узлов проверяются или удаляются сразу.
     var choosing by remember { mutableStateOf(false) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var deadOpen by remember { mutableStateOf(false) }
+    val split = NodeView.layout(data.filtered(), live, data.settings.pingFilter, data.settings.nodeSort, data.settings.hideDeadNodes)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Palette.Surface) {
         Column(Modifier.fillMaxHeight(.92f).padding(horizontal = 20.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -335,12 +362,27 @@ import java.util.Date
                 items(data.settings.subscriptions, key = { it.id }) { sub ->
                     SubscriptionRow(sub, data.nodes.count { it.id.startsWith("${sub.id}::") }, onRefreshSub, onOpenSettings)
                 }
-                item(key = "nodes-title") { SheetTitle("Узлы · ${data.filtered().size}") }
-                if (data.filtered().isEmpty()) item(key = "nodes-empty") {
+                item(key = "panel") {
+                    NodePanel(data.settings.pingFilter, data.settings.nodeSort, onPingFilter, onSort)
+                }
+                item(key = "nodes-title") {
+                    SheetTitle("Узлы · ${split.main.size}" + if (split.deadCount > 0) " · не отвечает ${split.deadCount}" else "")
+                }
+                if (split.main.isEmpty()) item(key = "nodes-empty") {
                     Text("Здесь пока нет узлов. Добавьте ссылку или outbound JSON.",
                         style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
                 }
-                items(data.filtered(), key = { it.id }) { node ->
+                items(split.main, key = { it.id }) { node ->
+                    ServerRow(node, node.id == connection.activeId, checking, live[node.id],
+                        choosing = choosing, picked = node.id in picked,
+                        onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
+                        onLongPress = { choosing = true;picked = picked + node.id },
+                        onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id })
+                }
+                if (split.deadCount > 0) item(key = "dead-folder") {
+                    DeadFolder(split.deadCount, deadOpen) { deadOpen = !deadOpen }
+                }
+                if (deadOpen) items(split.dead, key = { it.id }) { node ->
                     ServerRow(node, node.id == connection.activeId, checking, live[node.id],
                         choosing = choosing, picked = node.id in picked,
                         onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
@@ -371,6 +413,41 @@ import java.util.Date
         AlertDialog(onDismissRequest = { pendingDelete = null }, title = { Text("Удалить узел?") }, text = { Text(node.name) },
             confirmButton = { TextButton(onClick = { pendingDelete = null;onDelete(node) }) { Text("Удалить") } },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Отмена") } })
+    }
+}
+
+/** Компактная панель фильтра по пингу и сортировки над списком узлов. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun NodePanel(filter: PingFilterState, sort: NodeSortState, onFilter: (PingFilterState) -> Unit, onSort: (NodeSortState) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Фильтр по пингу", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PingFilterState.entries.forEach { value ->
+                FilterChip(filter == value, { onFilter(value) }, label = { Text(NodeView.filterLabel(value)) })
+            }
+        }
+        Text("Сортировка", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            NodeSortState.entries.forEach { value ->
+                FilterChip(sort == value, { onSort(value) }, label = { Text(NodeView.sortLabel(value)) })
+            }
+        }
+    }
+}
+
+/** Свёрнутая папка «Не отвечает»: узлы проверяются вместе с остальными и сами возвращаются наверх. */
+@Composable private fun DeadFolder(count: Int, open: Boolean, onToggle: () -> Unit) {
+    Surface(
+        shape = Palette.CardShape, color = Palette.Rose.copy(alpha = .08f),
+        border = BorderStroke(1.dp, Palette.Rose.copy(alpha = .26f)), modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Не отвечает ($count)", Modifier.weight(1f), color = Palette.Rose,
+                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum")
+            )
+            Text(if (open) "Свернуть" else "Показать", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
+        }
     }
 }
 

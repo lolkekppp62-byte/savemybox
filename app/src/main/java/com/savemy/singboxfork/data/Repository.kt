@@ -56,7 +56,10 @@ class Repository(context: Context) {
         mutable.value = next
     } }
     suspend fun updateSettings(transform: (Settings) -> Settings) = change { it.copy(settings = transform(it.settings)) }
-    suspend fun add(nodes: List<Node>) = change { it.copy(nodes = it.nodes + nodes) }
+    suspend fun add(nodes: List<Node>) = change { d ->
+        // Пул ограничен: список и проверка не должны разрастаться бесконечно.
+        d.copy(nodes = SubscriptionManager.capPool(d.nodes + nodes))
+    }
     suspend fun mark(id: String, mark: Mark) = change { d -> d.copy(nodes = d.nodes.map { if(it.id == id) it.copy(mark=mark) else it }) }
     suspend fun remove(id: String) = change { it.copy(nodes = it.nodes.filterNot { n -> n.id == id }) }
     /** Массовое удаление из мультивыбора: отсутствующие id просто игнорируются. */
@@ -75,8 +78,9 @@ class Repository(context: Context) {
     }
     /** Обновляет список узлов подписки: удаляет старые узлы этой подписки, добавляет свежие. */
     suspend fun addFromSubscription(subId: String, fresh: List<Node>) = change { d ->
-        val tagged = fresh.map { it.copy(id = "$subId::${it.name.take(80)}") }
+        // Дедупликация по адрес+порт+протокол и лимит на подписку.
+        val tagged = SubscriptionManager.distinct(fresh).map { it.copy(id = "$subId::${it.name.take(80)}") }
         val existing = d.nodes.filterNot { it.id.startsWith("$subId::") }
-        d.copy(nodes = existing + tagged)
+        d.copy(nodes = SubscriptionManager.capPool(existing + tagged))
     }
 }

@@ -2,6 +2,7 @@ package com.savemy.singboxfork
 
 import android.app.Application
 import com.savemy.singboxfork.core.*
+import com.savemy.singboxfork.data.DefaultSubscriptionsRegistry
 import com.savemy.singboxfork.data.Repository
 import com.savemy.singboxfork.work.RefreshWorker
 import com.savemy.singboxfork.work.SubscriptionWorker
@@ -18,6 +19,12 @@ class BoxApp : Application() {
         scope.launch {
             repository.load(); ready.complete(Unit)
             if(repository.loadError.value==null) {
+                // Каталог бесплатных подписок подставляется один раз, на первом запуске.
+                val seeded=DefaultSubscriptionsRegistry.seed(repository.state.value.settings.subscriptions)
+                if(seeded.size!=repository.state.value.settings.subscriptions.size) {
+                    repository.updateSettings { it.copy(subscriptions=seeded) }
+                    journal.add("Каталог подписок: добавлено слотов ${seeded.size}")
+                }
                 val s=repository.state.value.settings
                 RefreshWorker.schedule(this@BoxApp,s.intervalMinutes)
                 if(s.subscriptions.isEmpty()) SubscriptionWorker.cancelAll(this@BoxApp)

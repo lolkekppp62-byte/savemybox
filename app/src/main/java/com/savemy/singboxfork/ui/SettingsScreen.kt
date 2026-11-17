@@ -81,6 +81,17 @@ import kotlinx.coroutines.withContext
             Toggle("Переключаться на рабочий узел",s.smartRouting) { value -> change { it.copy(smartRouting=value) } }
             Text("Проверка каждые 30 секунд. После трёх неудачных запросов — выбор самого быстрого доступного узла вне BL.",style=MaterialTheme.typography.bodySmall)
         } }
+        item { Section("Проверка узлов") {
+            Toggle("Убирать нерабочие узлы в папку «Не отвечает»",s.hideDeadNodes) { value -> change { it.copy(hideDeadNodes=value) } }
+            Text("Неотвечающие узлы сворачиваются внизу списка. Общая проверка проходит и по ним: ответивший узел сам возвращается наверх.",style=MaterialTheme.typography.bodySmall)
+            Text("Профиль проверки")
+            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                listOf(CheckMode.FAST to "Быстрая · 1.5 / 2 с",CheckMode.PRECISE to "Точная · 3.5 / 4 с").forEach { (mode,label) ->
+                    FilterChip(s.checkMode==mode,{change { it.copy(checkMode=mode) }},label={Text(label)})
+                }
+            }
+            Text("Быстрая: 20 параллельных проб, подходит для ежедневной проверки. Точная — длинные таймауты для медленных сетей.",style=MaterialTheme.typography.bodySmall)
+        } }
         item { Section("Сеть") {
             Text("MTU")
             FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) { listOf(8500,1500,1480,1400,1280).forEach { mtu -> FilterChip(s.mtu==mtu,{change { it.copy(mtu=mtu) }},label={Text("$mtu")}) } }

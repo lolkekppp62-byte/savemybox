@@ -1,5 +1,6 @@
 package com.savemy.singboxfork.core
 
+import com.savemy.singboxfork.data.CheckMode
 import com.savemy.singboxfork.data.Node
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -10,8 +11,12 @@ import com.savemy.singboxfork.data.codec
 /**
  * Готовит цели проверки из outbound-узлов и переносит результаты чекера обратно в узлы.
  * Чистый Kotlin: не зависит от Android, libbox и состояния VPN.
+ * Профиль проверки задаёт параллельность и таймауты двух этапов.
  */
-class NodeCheckRunner(private val tcp: TcpProbe = SocketTcpProbe()) {
+class NodeCheckRunner(
+    private val tcp: TcpProbe = SocketTcpProbe(),
+    private val mode: CheckMode = CheckMode.FAST
+) {
     private val udpOnly = setOf("hysteria2", "tuic", "hysteria")
 
     fun target(node: Node): ProbeTarget? {
@@ -26,12 +31,20 @@ class NodeCheckRunner(private val tcp: TcpProbe = SocketTcpProbe()) {
         nodes: List<Node>,
         proxy: ProxyProbe,
         attempts: Int = 1,
+        checkMode: CheckMode = mode,
         onProgress: (CheckProgress) -> Unit = {},
         onBatch: suspend (List<NodeResult>) -> Unit = {}
     ): List<Node> {
         val targets = nodes.mapNotNull(::target)
         if (targets.isEmpty()) return emptyList()
-        val results = NodeChecker(tcp, proxy).run(targets, attempts, onProgress, onBatch)
+        val checker = NodeChecker(
+            tcp, proxy,
+            tcpConcurrency = checkMode.tcpConcurrency,
+            proxyConcurrency = checkMode.proxyConcurrency,
+            tcpTimeoutMs = checkMode.tcpTimeoutMs,
+            urlTimeoutMs = checkMode.urlTimeoutMs
+        )
+        val results = checker.run(targets, attempts, onProgress, onBatch)
         val byId = results.associateBy { it.id }
         return nodes.mapNotNull { node ->
             byId[node.id]?.let { r ->

@@ -76,6 +76,11 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
 
         fun sync(context: Context, subs: List<Subscription>) = subs.forEach { schedule(context, it) }
 
+        /** «Обновить все»: каждая подписка скачивается своей задачей, параллельно. */
+        fun refreshAllNow(context: Context, subs: List<Subscription>) {
+            subs.filter { it.enabled && it.url.isNotBlank() }.forEach { refreshNow(context, it.id) }
+        }
+
         /** Подписки с обновлением «при запуске» дёргаются один раз после старта приложения. */
         fun refreshOnStart(context: Context, subs: List<Subscription>) {
             subs.filter { it.enabled && it.refresh == SubscriptionRefresh.ON_START && it.url.isNotBlank() }

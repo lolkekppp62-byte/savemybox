@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,21 +31,27 @@ import java.util.Date
 
 /**
  * Экран подписок: ссылка, .txt/Base64-список, JSON, URI-узлы, QR камерой или из галереи.
- * Для каждой подписки настраиваются режим (БС/ЧС/оба) и расписание обновления.
+ * Вкладки БС/ЧС, встроенный каталог бесплатных подписок и параллельное обновление всех ссылок.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable fun SubscriptionScreen(
     context: Context,
     settings: Settings,
+    nodes: List<Node>,
     onAdd: (Subscription) -> Unit,
     onUpdate: (Subscription) -> Unit,
     onRemove: (String) -> Unit,
     onRefresh: (String) -> Unit,
+    onRefreshAll: () -> Unit,
     onImport: (String) -> Unit,
+    onCheck: () -> Unit,
     back: () -> Unit
 ) {
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var modeFilter by remember { mutableStateOf<SubscriptionMode?>(null) }
+    var catalog by remember { mutableStateOf(false) }
+    var suggestCheck by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun submit(raw: String) {
@@ -70,6 +77,11 @@ import java.util.Date
             if (decoded == null) error = "QR-код на изображении не распознан" else submit(decoded)
         }
     }
+    fun nodesOf(sub: Subscription) = nodes.filter { it.id.startsWith("${sub.id}::") }
+    val shown = SubscriptionManager.sortedForDisplay(
+        settings.subscriptions.filter { modeFilter == null || it.mode == modeFilter || it.mode == SubscriptionMode.UNIVERSAL },
+        { sub -> nodesOf(sub) }
+    )
 
     LazyColumn(
         Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -82,6 +94,27 @@ import java.util.Date
                 style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted
             )
         }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button({ onRefreshAll(); suggestCheck = true }) { Text("Обновить все подписки") }
+                OutlinedButton({ catalog = true }) { Text("Добавить из каталога") }
+            }
+        }
+        if (suggestCheck) item {
+            Surface(
+                shape = Palette.CardShape, color = Palette.Cyan.copy(alpha = .10f),
+                border = BorderStroke(1.dp, Palette.Cyan.copy(alpha = .30f)), modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Узлы обновляются в фоне. Прогнать быструю проверку?", Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall, color = Palette.Cyan
+                    )
+                    TextButton({ suggestCheck = false; onCheck() }) { Text("Проверить", color = Palette.Cyan) }
+                }
+            }
+        }
+        item { ModeTabs(modeFilter) { modeFilter = it } }
         item {
             Surface(
                 shape = Palette.CardShape, color = Palette.CardFill,
@@ -109,21 +142,93 @@ import java.util.Date
                 }
             }
         }
-        if (settings.subscriptions.isEmpty()) item {
-            Text("Подписок пока нет. Узлы, добавленные вручную, остаются в списке серверов.", color = Palette.TextMuted, style = MaterialTheme.typography.bodySmall)
+        if (shown.isEmpty()) item {
+            Text(
+                "Подписок пока нет. Узлы, добавленные вручную, остаются в списке серверов.",
+                color = Palette.TextMuted, style = MaterialTheme.typography.bodySmall
+            )
         }
-        items(settings.subscriptions, key = { it.id }) { sub ->
-            SubscriptionCard(sub, onUpdate, onRemove, onRefresh)
+        items(shown, key = { it.id }) { sub ->
+            SubscriptionCard(sub, nodesOf(sub), onUpdate, onRemove, onRefresh)
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
+    if (catalog) CatalogDialog(
+        settings.subscriptions,
+        onDismiss = { catalog = false },
+        onPick = { entry -> onAdd(DefaultSubscriptionsRegistry.toSubscription(entry)) }
+    )
+}
+
+@Composable private fun ModeTabs(value: SubscriptionMode?, onPick: (SubscriptionMode?) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        listOf(
+            null to "Все",
+            SubscriptionMode.BLACKLIST to "ЧС (Чёрный список)",
+            SubscriptionMode.WHITELIST to "БС (Белый список)"
+        ).forEach { (mode, label) ->
+            FilterChip(
+                selected = value == mode, onClick = { onPick(mode) }, label = { Text(label) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = (if (mode == SubscriptionMode.WHITELIST) Palette.Emerald else Palette.Cyan).copy(alpha = .18f),
+                    selectedLabelColor = if (mode == SubscriptionMode.WHITELIST) Palette.Emerald else Palette.Cyan
+                )
+            )
+        }
+    }
+}
+
+/** Каталог бесплатных подписок: слоты ЧС и БС с готовой привязкой к режиму. */
+@Composable private fun CatalogDialog(existing: List<Subscription>, onDismiss: () -> Unit, onPick: (CatalogEntry) -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Каталог подписок") }, text = {
+        LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(
+                    "Публичные пулы сообщества. Доступность и скорость зависят от сети — проверяйте узлы перед подключением.",
+                    style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted
+                )
+            }
+            items(DefaultSubscriptionsRegistry.entries, key = { it.id }) { entry ->
+                val added = existing.any { it.url == entry.url }
+                Surface(
+                    shape = Palette.CardShape, color = Palette.CardFill,
+                    border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(entry.title, style = MaterialTheme.typography.titleSmall)
+                        Text(entry.note, style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (entry.mode == SubscriptionMode.WHITELIST) "БС · 24 ч" else "ЧС · 6 ч",
+                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                                color = if (entry.mode == SubscriptionMode.WHITELIST) Palette.Emerald else Palette.Cyan
+                            )
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { onPick(entry) }, enabled = !added) {
+                                Text(if (added) "Добавлено" else "Добавить")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onDismiss) { Text("Закрыть") } })
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable private fun SubscriptionCard(sub: Subscription, onUpdate: (Subscription) -> Unit, onRemove: (String) -> Unit, onRefresh: (String) -> Unit) {
+@Composable private fun SubscriptionCard(
+    sub: Subscription,
+    subNodes: List<Node>,
+    onUpdate: (Subscription) -> Unit,
+    onRemove: (String) -> Unit,
+    onRefresh: (String) -> Unit
+) {
+    val dead = SubscriptionManager.isDead(subNodes)
     Surface(
-        shape = Palette.CardShape, color = Palette.CardFill,
-        border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()
+        shape = Palette.CardShape,
+        color = if (dead) Palette.Rose.copy(alpha = .08f) else Palette.CardFill,
+        border = BorderStroke(1.dp, if (dead) Palette.Rose.copy(alpha = .28f) else Palette.CardStroke),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -141,6 +246,15 @@ import java.util.Date
                 Switch(
                     checked = sub.enabled, onCheckedChange = { onUpdate(sub.copy(enabled = it)) },
                     colors = SwitchDefaults.colors(checkedTrackColor = Palette.Cyan, checkedThumbColor = Palette.Ink)
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${subNodes.size} узлов · живых ${SubscriptionManager.aliveCount(subNodes)}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.TextMuted
+                )
+                if (dead) Text(
+                    "Не отвечает", style = MaterialTheme.typography.labelMedium, color = Palette.Rose
                 )
             }
             Text("Режим маршрутизации", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)

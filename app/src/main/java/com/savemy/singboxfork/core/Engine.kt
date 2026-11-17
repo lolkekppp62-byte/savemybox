@@ -39,7 +39,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
         mutable.value=ConnectionState(Phase.CONNECTING)
         try {
             runtime.stop(); val data=repo.state.value
-            val selected=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
+            val selected=data.preferredForMode(data.settings.routingMode)
             requireNotNull(selected) { "Нет узла вне BL в выбранном фильтре" }
             runtime.start(data,vpn)
             mutable.value=ConnectionState(Phase.CONNECTED,selected.id)
@@ -95,7 +95,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
     } }
     /** Двухэтапная проверка; прогресс и пакеты результатов уходят в UI только при report=true. */
     private suspend fun measure(nodes:List<Node>,attempts:Int,report:Boolean=false):List<Node> =
-        runner.run(nodes,runtime.proxy,attempts,
+        runner.run(nodes,runtime.proxy,attempts,checkMode=repo.state.value.settings.checkMode,
             onProgress={ if(report) check.value=it },
             onBatch={ batch -> if(report) results.value=results.value+batch.associateBy { it.id } })
     private suspend fun healthCheck() { lock.withLock {
@@ -121,9 +121,11 @@ class Engine(private val context:Context,private val repo:Repository,private val
         if(mutable.value.phase!=Phase.CONNECTED) return@withLock
         try {
             val data=repo.state.value
-            runtime.reload(data)
-            val selected=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
-            mutable.value=mutable.value.copy(activeId=selected?.id,notice="Настройки применены")
+            // Смена режима БС/ЧС подставляет активный узел из подписки этого режима.
+            val preferred=data.preferredForMode(data.settings.routingMode)
+            if(preferred!=null && preferred.id!=data.settings.selectedId) repo.updateSettings { it.copy(selectedId=preferred.id) }
+            runtime.reload(repo.state.value)
+            mutable.value=mutable.value.copy(activeId=preferred?.id,notice="Настройки применены")
         } catch(_:Exception) { failConnection("Настройки не применены: VPN остановлен. Проверьте фильтр и конфигурацию.") }
     } }
     private fun failConnection(message:String) {

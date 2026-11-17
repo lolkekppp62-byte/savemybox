@@ -42,6 +42,12 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val bypassPackages: Set<String> = emptySet(), val proxyApps: Set<String> = emptySet(), val smartRouting: Boolean = true,
     val routingMode: RoutingMode = RoutingMode.WHITELIST_BYPASS,
     val presetIds: Set<String> = setOf("rf-gov", "ru-banks", "ru-market", "ru-media", "lan-p2p"),
+    /** Быстрая проверка включена по умолчанию. */
+    val checkMode: CheckMode = CheckMode.FAST,
+    /** Нерабочие узлы убираются в папку «Не отвечает». */
+    val hideDeadNodes: Boolean = true,
+    val pingFilter: PingFilterState = PingFilterState.ALL,
+    val nodeSort: NodeSortState = NodeSortState.PING,
     val mtu: Int = 1400, val adaptiveMtu: Boolean = false, val packetRecovery: Boolean = false,
     val intervalMinutes: Long = 60, val filter: NodeFilter = NodeFilter.ALL, val selectedId: String? = null,
     val killSwitch: Boolean = false,
