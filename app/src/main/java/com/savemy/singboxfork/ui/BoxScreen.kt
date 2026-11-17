@@ -18,6 +18,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.savemy.singboxfork.BoxApp
 import com.savemy.singboxfork.core.Phase
+import com.savemy.singboxfork.core.CheckProgress
+import com.savemy.singboxfork.core.NodeResult
+import com.savemy.singboxfork.core.TestStage
 import com.savemy.singboxfork.data.*
 import com.savemy.singboxfork.work.SubscriptionWorker
 import kotlinx.coroutines.*
@@ -30,15 +33,16 @@ import java.util.Date
     val data by app.repository.state.collectAsStateWithLifecycle()
     val connection by app.engine.state.collectAsStateWithLifecycle()
     val checking by app.engine.checking.collectAsStateWithLifecycle()
+    val progress by app.engine.progress.collectAsStateWithLifecycle()
+    val live by app.engine.liveResults.collectAsStateWithLifecycle()
     val loadError by app.repository.loadError.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var page by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var importing by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf<List<Node>?>(null) }
     val scope=rememberCoroutineScope()
     fun action(block:suspend ()->Unit) { scope.launch { try { app.ready.await();block() } catch(e:CancellationException) { throw e } catch(e:Exception) { error=e.message ?: "Операция не выполнена" } } }
-    fun scan(id:String?=null) { action { results=app.engine.checkAll(id) } }
+    fun scan(id:String?=null) { action { app.engine.checkAll(id) } }
     BoxTheme(data.settings) {
         Scaffold(containerColor=MaterialTheme.colorScheme.background.copy(alpha=0f),topBar={
             TopAppBar(title={ Column { Text(if(page.isEmpty()) "Савеми Бокс" else page,fontWeight=FontWeight.Bold); if(page.isEmpty()) Text("Ваш маршрут. Ваши правила.",style=MaterialTheme.typography.labelMedium) } },
@@ -64,10 +68,10 @@ import java.util.Date
                             } }
                             connection.notice?.let { Text(it,color=MaterialTheme.colorScheme.primary) }
                             loadError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
-                            Text("Проверка выполняет три HTTPS-запроса через каждый узел. Потери запросов — не измерение потерь IP-пакетов.",style=MaterialTheme.typography.bodySmall)
+                            Text("Сначала TCP-проверка серверов, затем HTTPS-запрос через каждый живой узел. Потери запросов — не измерение потерь IP-пакетов.",style=MaterialTheme.typography.bodySmall)
                             Filters(data.settings.filter) { f -> action { app.repository.updateSettings { it.copy(filter=f) };app.engine.applySettings() } }
                             Spacer(Modifier.height(24.dp))
-                            OutlinedButton(onClick={scan()},enabled=!checking && data.nodes.isNotEmpty(),modifier=Modifier.fillMaxWidth().heightIn(min=54.dp)) { if(checking) Text("Проверяем узлы…") else Text("Найти рабочие узлы") }
+                            OutlinedButton(onClick={scan()},enabled=!checking && data.nodes.isNotEmpty(),modifier=Modifier.fillMaxWidth().heightIn(min=54.dp)) { Text(if(checking) progressLabel(progress) else "Найти рабочие узлы") }
                             Button(onClick={if(connection.phase==Phase.CONNECTED || connection.phase==Phase.CONNECTING) onDisconnect() else onConnect()},
                                 enabled=connection.phase==Phase.CONNECTED || connection.phase==Phase.CONNECTING || (loadError==null && !checking && data.candidates().isNotEmpty()),modifier=Modifier.fillMaxWidth().height(88.dp),shape=MaterialTheme.shapes.extraLarge) {
                                 Icon(Icons.Rounded.PowerSettingsNew,null,Modifier.size(30.dp));Spacer(Modifier.width(12.dp))
@@ -80,11 +84,12 @@ import java.util.Date
                                 FilledTonalButton(onClick={importing=true}) { Text("Добавить") }
                             }
                             Filters(data.settings.filter) { f -> action { app.repository.updateSettings { it.copy(filter=f) };app.engine.applySettings() } }
-                            OutlinedButton(onClick={scan()},enabled=!checking && data.nodes.isNotEmpty(),modifier=Modifier.fillMaxWidth()) { Text(if(checking) "Проверка…" else "Найти рабочие узлы") }
+                            OutlinedButton(onClick={scan()},enabled=!checking && data.nodes.isNotEmpty(),modifier=Modifier.fillMaxWidth()) { Text(if(checking) progressLabel(progress) else "Найти рабочие узлы") }
+                            Text("Работают: ${data.nodes.count { it.status==CheckStatus.ALIVE }} из ${data.nodes.size}",style=MaterialTheme.typography.bodySmall)
                             Text("BL исключён из подключения. Фильтр BL проверяет запрещённые узлы только для диагностики.",style=MaterialTheme.typography.bodySmall)
                             LazyColumn(verticalArrangement=Arrangement.spacedBy(12.dp),contentPadding=PaddingValues(vertical=12.dp)) {
                                 if(data.filtered().isEmpty()) item { Text("Здесь пока нет узлов. Добавьте ссылку или outbound JSON.",Modifier.padding(20.dp)) }
-                                items(data.filtered(),key={it.id}) { node -> NodeCard(node,node.id==connection.activeId,checking,
+                                items(data.filtered(),key={it.id}) { node -> NodeCard(node,node.id==connection.activeId,checking,live[node.id],
                                     onCheck={scan(node.id)},onMark={m->action { app.repository.mark(node.id,m);app.engine.applySettings() }},
                                     onSelect={action { app.repository.updateSettings { it.copy(selectedId=node.id) };app.engine.applySettings() }},
                                     onDelete={action { app.repository.remove(node.id);app.engine.applySettings() }}) }
@@ -122,22 +127,34 @@ import java.util.Date
             app.journal.add("Добавлено узлов: ${nodes.size}");app.engine.applySettings()
         } }
         error?.let { text -> AlertDialog(onDismissRequest={error=null},title={Text("Не получилось")},text={Text(text)},confirmButton={TextButton(onClick={error=null}) { Text("Понятно") }}) }
-        results?.let { nodes -> AlertDialog(onDismissRequest={results=null},title={Text("Рабочие узлы: ${nodes.size}")},text={
-            LazyColumn { if(nodes.isEmpty()) item { Text("Рабочие узлы не найдены. Проверьте сеть, фильтр и данные подключения.") }
-                items(nodes) { n -> Text("${n.name}\n${n.latencyMs} мс · потери запросов ${n.lossPercent}%",Modifier.padding(vertical=8.dp)) }
-            }
-        },confirmButton={TextButton(onClick={results=null}) { Text("Закрыть") }}) }
     }
+}
+private fun progressLabel(p:CheckProgress?):String = when {
+    p==null -> "Проверяем узлы…"
+    p.stage==TestStage.TCP -> "TCP-проверка: ${p.done} из ${p.total}"
+    p.fallback -> "TCP не прошёл — проверяем все через URLTest: ${p.done} из ${p.total} · работают ${p.alive}"
+    else -> "Проверка узлов: ${p.done} из ${p.total} · работают ${p.alive}"
 }
 @Composable fun Filters(value:NodeFilter,onChange:(NodeFilter)->Unit) {
     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { NodeFilter.entries.forEach { FilterChip(selected=it==value,onClick={onChange(it)},label={Text(if(it==NodeFilter.ALL) "Все" else it.name)}) } }
 }
-@Composable private fun NodeCard(n:Node,active:Boolean,checking:Boolean,onCheck:()->Unit,onMark:(Mark)->Unit,onSelect:()->Unit,onDelete:()->Unit) {
+@Composable private fun NodeCard(n:Node,active:Boolean,checking:Boolean,live:NodeResult?,onCheck:()->Unit,onMark:(Mark)->Unit,onSelect:()->Unit,onDelete:()->Unit) {
     var delete by remember { mutableStateOf(false) }
+    val status=live?.status ?: n.status
+    val latency=live?.latencyMs ?: n.latencyMs
+    val tcpMs=live?.tcpMs ?: n.tcpMs
+    val checkedAt=live?.checkedAt ?: n.checkedAt
+    val loss=live?.lossPercent ?: n.lossPercent
+    val statusText=when(status) {
+        CheckStatus.UNCHECKED -> "Не проверен"
+        CheckStatus.TCP_FAILED -> "Сервер не отвечает (TCP)"
+        CheckStatus.URL_FAILED -> "Проверка через ядро не прошла"
+        CheckStatus.ALIVE -> "Работает · ${latency ?: "?"} мс"
+    }
     Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         Text((if(active) "● " else "")+n.name,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
-        Text("${n.protocol.uppercase()} · ${if(n.checkedAt==0L) "Не проверен" else if(n.latencyMs!=null) "Работает · ${n.latencyMs} мс" else "Не работает"}")
-        if(n.checkedAt>0) Text("${DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(Date(n.checkedAt))} · потери запросов ${n.lossPercent}%",style=MaterialTheme.typography.bodySmall)
+        Text("${n.protocol.uppercase()} · $statusText")
+        if(checkedAt>0) Text("${DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(Date(checkedAt))} · потери запросов ${loss ?: 0}%"+(tcpMs?.let { " · TCP $it мс" } ?: ""),style=MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { Mark.entries.forEach { m -> FilterChip(selected=n.mark==m,onClick={onMark(m)},label={Text(if(m==Mark.NONE) "Обычный" else m.name)}) } }
         Row { TextButton(onClick=onSelect,enabled=n.mark!=Mark.BL) { Text("Выбрать") };TextButton(onClick=onCheck,enabled=!checking) { Text("Обновить") };IconButton(onClick={delete=true}) { Icon(Icons.Rounded.DeleteOutline,"Удалить узел") } }
     } }

@@ -15,7 +15,8 @@ fun main(args:Array<String>) {
         var count=0;var errors=0
         File(args[0]).walkTopDown().filter { it.extension=="kt" }.forEach { file ->
             count++
-            val parsed=factory.createFile(file.name,file.readText())
+            // CRLF в исходниках ломает разбор PSI: нормализуем перевод строки перед парсингом.
+            val parsed=factory.createFile(file.name,file.readText().replace("\r\n","\n").replace('\r','\n'))
             PsiTreeUtil.collectElementsOfType(parsed,PsiErrorElement::class.java).forEach { error ->
                 val line=parsed.text.take(error.textOffset).count { it=='\n' }+1
                 println("${file.path}:$line: ${error.errorDescription}");errors++

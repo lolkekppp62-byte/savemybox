@@ -26,6 +26,9 @@ class Engine(private val context:Context,private val repo:Repository,private val
     private val mutable=MutableStateFlow(ConnectionState())
     val state=mutable.asStateFlow()
     val checking=MutableStateFlow(false)
+    val progress=MutableStateFlow<CheckProgress?>(null)
+    val liveResults=MutableStateFlow<Map<String,NodeResult>>(emptyMap())
+    private val tcpProbe:TcpProbe=SocketTcpProbe()
     private val platform=AndroidPlatform(context)
     private var server:CommandServer?=null
     private var api:LocalApi?=null
@@ -52,7 +55,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
         if(coreLog.length()>512_000) coreLog.writeText("")
         server=CommandServer(this,platform).also { it.start() }
         api=LocalApi(port,secret)
-        server!!.startOrReloadService(ConfigFactory.create(data,vpn!=null,port,secret,coreLog.path,mtu(data.settings),android.os.Build.VERSION.SDK_INT>=29),OverrideOptions())
+        server!!.startOrReloadService(ConfigFactory.build(spec(data,vpn!=null)),OverrideOptions())
         signature=fingerprint(data)
     }
     private fun mtu(s:Settings):Int {
@@ -62,6 +65,10 @@ class Engine(private val context:Context,private val repo:Repository,private val
             .mapNotNull { if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) cm.getLinkProperties(it)?.mtu?.takeIf { n -> n>0 } else null }.minOrNull() ?: 1500
         return (m-100).coerceIn(1280,minOf(s.mtu,1500))
     }
+    /** rule-set читаются из внешнего каталога приложения: пользователь кладёт .srs файлы сам. */
+    private val rulesDir=File(context.getExternalFilesDir(null) ?: context.filesDir,"rulesets")
+    private fun spec(data:AppData,vpn:Boolean)=CoreSpec(data,vpn,port,secret,coreLog.path,mtu(data.settings),android.os.Build.VERSION.SDK_INT>=29,
+        ruleSetsDir=rulesDir.path,advancedJson=data.settings.advancedJson.takeIf { data.settings.advancedMode && it.isNotBlank() })
     private fun closeCore() {
         runCatching { server?.closeService() }; runCatching { server?.close() }; server=null;api=null;signature=""
         platform.close(); platform.vpn?.closeTun(); platform.vpn=null
@@ -94,6 +101,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
     suspend fun checkAll(id:String?=null):List<Node> = withContext(Dispatchers.IO) { lock.withLock {
         scanJob=currentCoroutineContext()[Job]
         checking.value=true
+        liveResults.value=emptyMap()
         val temporary=mutable.value.phase!=Phase.CONNECTED
         try {
             val data=repo.state.value
@@ -102,13 +110,17 @@ class Engine(private val context:Context,private val repo:Repository,private val
             if(temporary) { closeCore();start(data,null) }
             else if(signature!=fingerprint(data)) {
                 // Горячая перезагрузка сохраняет службу; новый TUN учитывает изменённые исключения.
-                server!!.startOrReloadService(ConfigFactory.create(data,true,port,secret,coreLog.path,mtu(data.settings),android.os.Build.VERSION.SDK_INT>=29),OverrideOptions())
+                server!!.startOrReloadService(ConfigFactory.build(spec(data,true)),OverrideOptions())
                 signature=fingerprint(data)
                 val current=data.candidates().firstOrNull { it.id==data.settings.selectedId } ?: data.candidates().firstOrNull()
                 mutable.value=mutable.value.copy(activeId=current?.id)
             }
-            val result=probeAll(nodes)
+            val result=measure(nodes,attempts=1,report=true)
             repo.results(result)
+            if(progress.value?.fallback==true) {
+                journal.add("TCP-этап не пропустил ни одного узла: все проверены через URLTest")
+                mutable.value=mutable.value.copy(notice="TCP-проверка не прошла ни для одного узла — возможен перехват DNS. Все узлы проверены через URLTest.")
+            }
             journal.add("Проверено узлов: ${result.size}; работают: ${result.count { it.latencyMs!=null }}")
             result.filter { it.latencyMs!=null }.sortedBy { it.latencyMs }
         } catch(e:CancellationException) { throw e }
@@ -116,30 +128,44 @@ class Engine(private val context:Context,private val repo:Repository,private val
             if(!temporary) failConnection("Не удалось перезагрузить конфигурацию. VPN остановлен.")
             journal.add("Ошибка диагностики (${e.javaClass.simpleName})");throw IllegalStateException("Не удалось проверить узлы. Проверьте подключение к сети и JSON конфигурации.")
         }
-        finally { scanJob=null;checking.value=false;if(temporary) closeCore() }
+        finally { scanJob=null;checking.value=false;progress.value=null;if(temporary) closeCore() }
     } }
-    private suspend fun probeAll(nodes:List<Node>):List<Node> = coroutineScope {
-        val limiter=kotlinx.coroutines.sync.Semaphore(8)
-        nodes.map { node -> async { limiter.acquire();try { probe(node) } finally { limiter.release() } } }.awaitAll()
+    /** У протоколов QUIC нет TCP-порта: первый этап для них бессмысленен. */
+    private val udpOnly=setOf("hysteria2","tuic","hysteria")
+    private fun target(node:Node):ProbeTarget? {
+        val obj=runCatching { codec.parseToJsonElement(node.outbound).jsonObject }.getOrNull() ?: return null
+        val host=obj["server"]?.jsonPrimitive?.contentOrNull ?: return null
+        val port=obj["server_port"]?.jsonPrimitive?.intOrNull ?: return null
+        return ProbeTarget(node.id,host.removePrefix("[").removeSuffix("]"),port,node.protocol in udpOnly)
     }
-    private suspend fun probe(node:Node):Node {
-        val delays=mutableListOf<Long>()
-        repeat(3) {
-            currentCoroutineContext().ensureActive()
-            try { val value=codec.parseToJsonElement(api!!.delay(node.id)).jsonObject["delay"]!!.jsonPrimitive.long;delays+=value }
-            catch(e:CancellationException) { throw e }
-            catch(_:Exception) { /* Неудачная проба учитывается, но секреты не попадают в журнал. */ }
+    private fun proxyProbe():ProxyProbe = object:ProxyProbe {
+        override suspend fun urlTest(tag:String,url:String,timeoutMs:Int):Long {
+            val client=api ?: error("Локальный API не запущен")
+            val text=withContext(Dispatchers.IO) { client.delay(tag,url,timeoutMs) }
+            return codec.parseToJsonElement(text).jsonObject["delay"]?.jsonPrimitive?.long ?: error("Локальный API не вернул задержку")
         }
-        return node.copy(latencyMs=delays.takeIf { it.isNotEmpty() }?.sorted()?.let { it[it.size/2] },lossPercent=(3-delays.size)*100/3,checkedAt=System.currentTimeMillis())
+    }
+    /** TCP-пречек отсеивает мёртвые серверы, URLTest идёт только по живым. */
+    private suspend fun measure(nodes:List<Node>,attempts:Int,report:Boolean=false):List<Node> {
+        val targets=nodes.mapNotNull(::target)
+        if(targets.isEmpty()) return emptyList()
+        val results=NodeChecker(tcpProbe,proxyProbe()).run(targets,attempts,
+            onProgress={ if(report) progress.value=it },
+            onBatch={ batch -> if(report) liveResults.value=liveResults.value+batch.associateBy { it.id } })
+        val byId=results.associateBy { it.id }
+        return nodes.mapNotNull { node -> byId[node.id]?.let { r ->
+            node.copy(tcpMs=r.tcpMs,latencyMs=r.latencyMs,lossPercent=r.lossPercent,status=r.status,checkedAt=r.checkedAt)
+        } }
     }
     private suspend fun healthCheck() { lock.withLock {
         if(mutable.value.phase!=Phase.CONNECTED || !repo.state.value.settings.smartRouting) return@withLock
         try {
             val data=repo.state.value
             val active=data.nodes.firstOrNull { it.id==mutable.value.activeId } ?: return@withLock
-            val result=probe(active);repo.results(listOf(result))
+            val result=measure(listOf(active),attempts=3).firstOrNull() ?: return@withLock
+            repo.results(listOf(result))
             if(result.latencyMs!=null) return@withLock
-            val alternatives=probeAll(data.candidates().filter { it.id!=active.id })
+            val alternatives=measure(data.candidates().filter { it.id!=active.id },attempts=1)
             repo.results(alternatives)
             val best=alternatives.filter { it.latencyMs!=null }.minByOrNull { it.latencyMs!! }
             if(best!=null) {
@@ -154,7 +180,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
         if(mutable.value.phase!=Phase.CONNECTED) return@withLock
         try {
             val data=repo.state.value
-            server!!.startOrReloadService(ConfigFactory.create(data,true,port,secret,coreLog.path,mtu(data.settings),android.os.Build.VERSION.SDK_INT>=29),OverrideOptions())
+            server!!.startOrReloadService(ConfigFactory.build(spec(data,true)),OverrideOptions())
             signature=fingerprint(data)
             val selected=data.candidates().firstOrNull { it.id==data.settings.selectedId } ?: data.candidates().firstOrNull()
             mutable.value=mutable.value.copy(activeId=selected?.id,notice="Настройки применены")

@@ -9,7 +9,8 @@ import java.net.URLEncoder
 class LocalApi(private val port: Int, private val secret: String) {
     private val sockets=java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
     fun cancelPending() { sockets.forEach { runCatching { it.close() } } }
-    fun delay(tag: String): String = request("GET","/proxies/${URLEncoder.encode(tag,"UTF-8")}/delay?timeout=5000&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204")
+    fun delay(tag: String, url: String = DEFAULT_PROBE_URL, timeoutMs: Int = 5000): String =
+        request("GET","/proxies/${URLEncoder.encode(tag,"UTF-8")}/delay?timeout=$timeoutMs&url=${URLEncoder.encode(url,"UTF-8")}")
     fun select(tag: String) { request("PUT","/proxies/proxy", "{\"name\":\"$tag\"}") }
     private fun request(method: String,path: String,body: String=""): String = Socket().use { socket ->
         sockets.add(socket)

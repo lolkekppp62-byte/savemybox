@@ -30,7 +30,7 @@ class CoreTest {
         assertEquals(2,Importer.parse("# subscription header\n\nvless://$uuid@example.com:443\n# another\nvless://$uuid@example.net:443").size)
     }
     @Test fun subscriptionSkipsUnsupportedAndMalformedRows() {
-        val imported=Importer.parse("# list\\nvless://$uuid@example.com:443?security=tls&type=xhttp&host=cdn.example.com&extra={\\\"mux\\\":true}#XHTTP\\nvless://bad@example.net:443?fragment=3,1,tlshello,0-5#unsupported\\nnot-a-node")
+        val imported=Importer.parse("# list\nvless://$uuid@example.com:443?security=tls&type=xhttp&host=cdn.example.com&extra=%7B%22mux%22%3Atrue%7D#XHTTP\nvless://bad@example.net:443?fragment=3,1,tlshello,0-5#unsupported\nnot-a-node")
         assertEquals(1,imported.size)
         assertEquals("XHTTP",imported.single().name)
     }

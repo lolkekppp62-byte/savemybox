@@ -62,7 +62,7 @@ class Repository(context: Context) {
     // Результаты проверки не восстанавливают удалённый узел и не перезаписывают свежую отметку BL/WL.
     suspend fun results(nodes: List<Node>) = change { d ->
         val updates = nodes.associateBy { it.id }
-        d.copy(nodes = d.nodes.map { old -> updates[old.id]?.let { old.copy(latencyMs=it.latencyMs,lossPercent=it.lossPercent,checkedAt=it.checkedAt) } ?: old })
+        d.copy(nodes = d.nodes.map { old -> updates[old.id]?.let { old.copy(tcpMs=it.tcpMs,latencyMs=it.latencyMs,lossPercent=it.lossPercent,status=it.status,checkedAt=it.checkedAt) } ?: old })
     }
     /** Обновляет список узлов подписки: удаляет старые узлы этой подписки, добавляет свежие. */
     suspend fun addFromSubscription(subId: String, fresh: List<Node>) = change { d ->

@@ -6,13 +6,17 @@ import java.util.UUID
 
 val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 @Serializable enum class Mark { NONE, BL, WL }
+@Serializable enum class CheckStatus { UNCHECKED, TCP_FAILED, URL_FAILED, ALIVE }
 @Serializable enum class NodeFilter { ALL, BL, WL }
 @Serializable data class Node(
     val id: String = UUID.randomUUID().toString(), val name: String, val outbound: String,
     val mark: Mark = Mark.NONE, val latencyMs: Long? = null, val lossPercent: Int? = null,
-    val checkedAt: Long = 0
+    val tcpMs: Long? = null, val status: CheckStatus = CheckStatus.UNCHECKED,
+    val checkedAt: Long = 0,
+    /** Тип протокола, заполняется парсером; для старых записей пуст и берётся из outbound. */
+    val type: String = ""
 ) {
-    val protocol: String get() = runCatching { codec.parseToJsonElement(outbound).jsonObject["type"]!!.jsonPrimitive.content }.getOrDefault("?")
+    val protocol: String get() = type.ifEmpty { runCatching { codec.parseToJsonElement(outbound).jsonObject["type"]!!.jsonPrimitive.content }.getOrDefault("?") }
 }
 @Serializable data class Subscription(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -31,7 +35,10 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val killSwitch: Boolean = false,
     val startOnBoot: Boolean = false,
     val subscriptions: List<Subscription> = emptyList(),
-    val subIntervalMinutes: Long = 360
+    val subIntervalMinutes: Long = 360,
+    val routing: RoutingProfile = RoutingProfile(),
+    val advancedMode: Boolean = false,
+    val advancedJson: String = ""
 )
 @Serializable data class AppData(val nodes: List<Node> = emptyList(), val settings: Settings = Settings())
 fun AppData.filtered(): List<Node> = nodes.filter { settings.filter == NodeFilter.ALL || it.mark.name == settings.filter.name }
