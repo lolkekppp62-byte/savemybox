@@ -18,18 +18,30 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 ) {
     val protocol: String get() = type.ifEmpty { runCatching { codec.parseToJsonElement(outbound).jsonObject["type"]!!.jsonPrimitive.content }.getOrDefault("?") }
 }
+/** Привязка подписки к режиму: универсальная работает в БС и ЧС. */
+@Serializable enum class SubscriptionMode { UNIVERSAL, BLACKLIST, WHITELIST }
+
+/** Расписание фонового обновления подписки. */
+@Serializable enum class SubscriptionRefresh { OFF, ON_START, H6, H12, H24 }
+
 @Serializable data class Subscription(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",
-    val url: String,
+    val url: String = "",
     val enabled: Boolean = true,
-    val lastUpdated: Long = 0
+    val lastUpdated: Long = 0,
+    val mode: SubscriptionMode = SubscriptionMode.UNIVERSAL,
+    val refresh: SubscriptionRefresh = SubscriptionRefresh.H24,
+    /** Откуда добавлена подписка: url, qr, json — только для подписи в интерфейсе. */
+    val source: String = "url"
 )
 @Serializable data class Settings(
     val theme: String = "system", val accent: Long = 0xFF63D6C5,
     val russianServices: Boolean = false,
     val russianPackages: Set<String> = setOf("com.vkontakte.android", "ru.oneme.app", "ru.rostel", "ru.yandex.searchplugin", "ru.yandex.taxi", "ru.yandex.yandexmaps", "ru.ozon.app.android", "com.wildberries.ru", "ru.sberbankmobile", "com.idamob.tinkoff.android", "ru.mail.mailapp"),
-    val bypassPackages: Set<String> = emptySet(), val smartRouting: Boolean = true,
+    val bypassPackages: Set<String> = emptySet(), val proxyApps: Set<String> = emptySet(), val smartRouting: Boolean = true,
+    val routingMode: RoutingMode = RoutingMode.WHITELIST_BYPASS,
+    val presetIds: Set<String> = setOf("rf-gov", "ru-banks", "ru-market", "ru-media", "lan-p2p"),
     val mtu: Int = 1400, val adaptiveMtu: Boolean = false, val packetRecovery: Boolean = false,
     val intervalMinutes: Long = 60, val filter: NodeFilter = NodeFilter.ALL, val selectedId: String? = null,
     val killSwitch: Boolean = false,

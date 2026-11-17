@@ -9,6 +9,8 @@ import androidx.core.app.NotificationCompat
 import com.savemy.singboxfork.BoxApp
 import com.savemy.singboxfork.MainActivity
 import com.savemy.singboxfork.core.Phase
+import com.savemy.singboxfork.core.SmartRouter
+import com.savemy.singboxfork.data.RoutingMode
 import kotlinx.coroutines.*
 
 class BoxVpnService : VpnService() {
@@ -42,20 +44,36 @@ class BoxVpnService : VpnService() {
     fun openTun(options: io.nekohasekai.libbox.TunOptions): Int {
         check(prepare(this)==null) { "Разрешение VPN отозвано" }
         closeTun()
-        val ks=app.repository.state.value.settings.killSwitch
+        val settings=app.repository.state.value.settings
+        // БС — исключения идут мимо VPN; ЧС — в VPN попадают только приложения чёрного списка.
+        val routing=SmartRouter.effective(
+            settings.routing, settings.routingMode, settings.presetIds, installedPackages(),
+            settings.bypassPackages + if(settings.russianServices) settings.russianPackages else emptySet(),
+            settings.proxyApps
+        )
+        // Блокировка трафика без VPN несовместима с ЧС: невыбранные приложения должны ходить напрямую.
+        val ks=settings.killSwitch && settings.routingMode!=RoutingMode.BLACKLIST_PROXY
         val builder=Builder().setSession("Савеми Бокс").setMtu(options.mtu).setBlocking(ks)
         if(Build.VERSION.SDK_INT>=29) builder.setMetered(false)
         val v4=options.inet4Address; while(v4.hasNext()) { val a=v4.next(); builder.addAddress(a.address(),a.prefix()) }
         val v6=options.inet6Address; while(v6.hasNext()) { val a=v6.next(); builder.addAddress(a.address(),a.prefix()) }
         builder.addRoute("0.0.0.0",0); builder.addRoute("::",0); builder.addDnsServer("172.19.0.2")
-        val excluded=options.excludePackage
-        while(excluded.hasNext()) {
-            try { builder.addDisallowedApplication(excluded.next()) }
-            catch(_:android.content.pm.PackageManager.NameNotFoundException) { /* Неустановленные пакеты сохраняются для будущих установок. */ }
+        if(settings.routingMode==RoutingMode.BLACKLIST_PROXY) {
+            routing.includedApps.forEach { pkg ->
+                try { builder.addAllowedApplication(pkg) }
+                catch(_:android.content.pm.PackageManager.NameNotFoundException) { /* Пакет удалён с телефона. */ }
+            }
+        } else {
+            routing.excludedApps.forEach { pkg ->
+                try { builder.addDisallowedApplication(pkg) }
+                catch(_:android.content.pm.PackageManager.NameNotFoundException) { /* Неустановленные пакеты сохраняются для будущих установок. */ }
+            }
         }
         tun=builder.establish() ?: error("Android не создал VPN")
         return tun!!.fd
     }
+    private fun installedPackages(): Set<String> =
+        runCatching { packageManager.getInstalledPackages(0).map { it.packageName }.toSet() }.getOrDefault(emptySet())
     override fun onRevoke() { scope.launch { app.engine.disconnect(); stopSelf() } }
     override fun onDestroy() { scope.cancel(); app.scope.launch { app.engine.disconnect(this@BoxVpnService) }; super.onDestroy() }
 }

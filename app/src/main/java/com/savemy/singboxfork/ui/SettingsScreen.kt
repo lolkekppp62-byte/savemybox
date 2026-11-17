@@ -17,10 +17,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openLogs:()->Unit,context: Context) {
+@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,context: Context) {
     val s=data.settings
     var custom by remember { mutableStateOf("") };var unit by remember { mutableStateOf("minutes") };var error by remember { mutableStateOf<String?>(null) }
-    var subUrl by remember { mutableStateOf("") }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         item { Text("Настройки",style=MaterialTheme.typography.headlineLarge);Text("Внешний вид меняется сразу. Сетевые настройки переподключают туннель.") }
         item { Section("Оформление") {
@@ -61,21 +60,24 @@ import kotlinx.coroutines.withContext
                     TextButton(onClick={ change { it.copy(subscriptions=it.subscriptions.filterNot { sb -> sb.id==sub.id }) } }) { Text("Удалить") }
                 }
             }
-            OutlinedTextField(subUrl,{subUrl=it},label={Text("URL подписки (Base64 или ссылки)")},modifier=Modifier.fillMaxWidth(),singleLine=true)
-            Button(onClick={
-                val url=subUrl.trim()
-                if(url.startsWith("http://") || url.startsWith("https://")) {
-                    change { it.copy(subscriptions=it.subscriptions+Subscription(url=url)) }
-                    subUrl=""
-                }
-            },enabled=subUrl.trim().let { it.startsWith("http://") || it.startsWith("https://") }) { Text("Добавить подписку") }
-            Text("Клиент скачает все узлы из URL и обновит их по расписанию.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(openSubscriptions) { Text("Подписки, QR и расписание · ${s.subscriptions.size}") }
+            Text("Ссылка, .txt, Base64, JSON или QR-код. Для каждой подписки задаются режим БС/ЧС и обновление.",style=MaterialTheme.typography.bodySmall)
         } }
         item { Section("Маршрутизация") {
+            Text("Режим")
+            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                listOf(RoutingMode.WHITELIST_BYPASS to "БС · всё через VPN", RoutingMode.BLACKLIST_PROXY to "ЧС · VPN только для списка").forEach { (mode,label) ->
+                    val accent=if(mode==RoutingMode.WHITELIST_BYPASS) Palette.Emerald else Palette.Cyan
+                    FilterChip(s.routingMode==mode,{change { it.copy(routingMode=mode) }},label={Text(label)},
+                        colors=FilterChipDefaults.filterChipColors(selectedContainerColor=accent.copy(alpha=.18f),selectedLabelColor=accent))
+                }
+            }
+            Text(if(s.routingMode==RoutingMode.WHITELIST_BYPASS) "БС: VPN для всего трафика, кроме приложений и доменов Белого списка." else "ЧС: напрямую всё, в VPN идут только домены и приложения Чёрного списка.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(openApps) { Text("Приложения БС и ЧС · ${s.bypassPackages.size} / ${s.proxyApps.size}") }
+            OutlinedButton(openRussian) { Text("Доменные правила списков") }
+            Text("Пресеты: включено ${s.presetIds.size} из 10 · БС изумрудный, ЧС циановый.",style=MaterialTheme.typography.bodySmall)
             Toggle("Российские сервисы",s.russianServices) { value -> change { it.copy(russianServices=value) } }
             Text("Приложения из редактируемого списка идут напрямую. Это список пакетов, не автоматическое определение страны.",style=MaterialTheme.typography.bodySmall)
-            OutlinedButton(openRussian) { Text("Изменить российский список · ${s.russianPackages.size}") }
-            OutlinedButton(openApps) { Text("Обход VPN приложениями · ${s.bypassPackages.size}") }
             Toggle("Переключаться на рабочий узел",s.smartRouting) { value -> change { it.copy(smartRouting=value) } }
             Text("Проверка каждые 30 секунд. После трёх неудачных запросов — выбор самого быстрого доступного узла вне BL.",style=MaterialTheme.typography.bodySmall)
         } }
@@ -105,27 +107,4 @@ import kotlinx.coroutines.withContext
 @Composable private fun Section(title:String,content:@Composable ColumnScope.()->Unit) { Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) { Text(title,style=MaterialTheme.typography.titleMedium);content() } } }
 @Composable private fun Toggle(label:String,checked:Boolean,onChange:(Boolean)->Unit) { Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { Text(label,Modifier.weight(1f).padding(top=12.dp));Switch(checked,onChange) } }
 
-@Composable fun AppBypassScreen(context:Context,selected:Set<String>,change:(Set<String>)->Unit,back:()->Unit) {
-    var apps by remember { mutableStateOf<List<Pair<String,String>>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) };var query by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) { apps=withContext(Dispatchers.IO) { context.packageManager.getInstalledApplications(0).filter { it.packageName!=context.packageName }.map { it.packageName to it.loadLabel(context.packageManager).toString() }.sortedBy { it.second.lowercase() } };loading=false }
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
-        TextButton(back) { Text("Назад") };Text("Обход VPN",style=MaterialTheme.typography.headlineMedium);Text("Выбрано: ${selected.size}")
-        OutlinedTextField(query,{query=it},label={Text("Название или пакет")},modifier=Modifier.fillMaxWidth())
-        if(loading) CircularProgressIndicator()
-        LazyColumn { items(apps.filter { it.first.contains(query,true)||it.second.contains(query,true) },key={it.first}) { (id,name) ->
-            Row(Modifier.fillMaxWidth().padding(vertical=8.dp)) { Checkbox(id in selected,{ yes -> change(if(yes) selected+id else selected-id) });Column { Text(name);Text(id,style=MaterialTheme.typography.bodySmall) } }
-        } }
-    }
-}
-@Composable fun RussianListScreen(packages:Set<String>,change:(Set<String>)->Unit,back:()->Unit) {
-    var value by remember { mutableStateOf("") };var error by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
-        TextButton(back) { Text("Назад") };Text("Российские приложения",style=MaterialTheme.typography.headlineMedium)
-        Text("Укажите точное имя пакета. Список можно исправлять для вашей версии приложения.")
-        OutlinedTextField(value,{value=it;error=false},label={Text("Например: com.vkontakte.android")},modifier=Modifier.fillMaxWidth(),isError=error)
-        Button({if(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+").matches(value.trim())) { change(packages+value.trim());value="" } else error=true}) { Text("Добавить пакет") }
-        if(error) Text("Некорректное имя пакета",color=MaterialTheme.colorScheme.error)
-        LazyColumn { items(packages.sorted(),key={it}) { id -> Row(Modifier.fillMaxWidth()) { Text(id,Modifier.weight(1f).padding(vertical=12.dp));TextButton({change(packages-id)}) { Text("Убрать") } } } }
-    }
-}
+

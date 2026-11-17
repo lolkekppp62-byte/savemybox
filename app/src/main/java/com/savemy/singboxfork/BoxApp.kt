@@ -20,8 +20,8 @@ class BoxApp : Application() {
             if(repository.loadError.value==null) {
                 val s=repository.state.value.settings
                 RefreshWorker.schedule(this@BoxApp,s.intervalMinutes)
-                if(s.subscriptions.isNotEmpty()) SubscriptionWorker.schedule(this@BoxApp,s.subIntervalMinutes)
-                else SubscriptionWorker.cancel(this@BoxApp)
+                if(s.subscriptions.isEmpty()) SubscriptionWorker.cancelAll(this@BoxApp)
+                else { SubscriptionWorker.sync(this@BoxApp,s.subscriptions);SubscriptionWorker.refreshOnStart(this@BoxApp,s.subscriptions) }
             }
         }
     }

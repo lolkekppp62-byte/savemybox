@@ -14,7 +14,9 @@ data class CoreSpec(
     val effectiveMtu: Int = data.settings.mtu,
     val packageRules: Boolean = true,
     val ruleSetsDir: String? = null,
-    val advancedJson: String? = null
+    val advancedJson: String? = null,
+    /** Установленные на телефоне приложения: из паков подтягиваются только они. */
+    val installedPackages: Set<String> = emptySet()
 )
 
 object ConfigFactory {
@@ -25,9 +27,17 @@ object ConfigFactory {
     fun build(spec: CoreSpec): String {
         val data = spec.data
         val s = data.settings
-        val routing = s.routing
+        // Пресеты Фарватера и ручные правила сводятся в один набор: БС -> direct, ЧС -> proxy.
+        val routing = SmartRouter.effective(
+            profile = s.routing,
+            mode = s.routingMode,
+            presetIds = s.presetIds,
+            installed = spec.installedPackages,
+            extraDirectApps = s.bypassPackages + if (s.russianServices) s.russianPackages else emptySet(),
+            extraProxyApps = s.proxyApps
+        )
         require(spec.effectiveMtu in 1280..8500)
-        val candidates = data.candidates()
+        val candidates = data.candidates(s.routingMode)
         if (spec.vpn) require(candidates.isNotEmpty()) { "Нет доступных для подключения узлов. Смените фильтр или уберите BL." }
         val selected = candidates.firstOrNull { it.id == s.selectedId } ?: candidates.firstOrNull()
         val outbounds = data.nodes.map { node ->
@@ -41,8 +51,9 @@ object ConfigFactory {
             put("outbounds", JsonArray((candidates.map { it.id }.ifEmpty { listOf("direct") }).map(::JsonPrimitive)))
             put("default", selected?.id ?: "direct"); put("interrupt_exist_connections", true)
         })
-        val excluded = s.bypassPackages + if (s.russianServices) s.russianPackages else emptySet()
-        val ruleSets = prepareRuleSets(routing.ruleSets, spec.ruleSetsDir)
+        // В БС исключения TUN идут мимо VPN; в ЧС список наоборот — только через VPN (addAllowedApplication).
+        val excluded = routing.excludedApps
+        val ruleSets = prepareRuleSets(s.routing.ruleSets, spec.ruleSetsDir)
         val base = buildJsonObject {
             put("log", buildJsonObject { put("level", "warn"); put("timestamp", true); put("output", spec.logPath) })
             put("dns", buildJsonObject {
@@ -60,7 +71,7 @@ object ConfigFactory {
             })
             put("outbounds", JsonArray(outbounds))
             put("route", buildJsonObject {
-                put("auto_detect_interface", true); put("default_domain_resolver", "bootstrap"); put("final", "proxy")
+                put("auto_detect_interface", true); put("default_domain_resolver", "bootstrap"); put("final", routing.finalOutbound)
                 if (ruleSets.isNotEmpty()) put("rule_set", buildJsonArray {
                     ruleSets.forEach { (set, path) -> add(buildJsonObject {
                         put("type", "local"); put("tag", set.tag); put("format", "binary"); put("path", path)
@@ -70,14 +81,19 @@ object ConfigFactory {
                     add(buildJsonObject { put("action", "sniff") })
                     add(buildJsonObject { put("protocol", "dns"); put("action", "hijack-dns") })
                     // Пакеты исключаются на уровне TUN; правило — дополнительная защита на Android 10+.
-                    if (spec.packageRules && excluded.isNotEmpty()) add(buildJsonObject { put("package_name", JsonArray(excluded.map(::JsonPrimitive))); put("action", "route"); put("outbound", "direct") })
+                    if (spec.packageRules && excluded.isNotEmpty()) add(buildJsonObject { put("package_name", JsonArray(excluded.map(::JsonPrimitive))); routeTo(RouteTarget.DIRECT) })
                     if (spec.packageRules && routing.blockPackages.isNotEmpty()) add(buildJsonObject { put("package_name", JsonArray(routing.blockPackages.map(::JsonPrimitive))); routeTo(RouteTarget.BLOCK) })
-                    // Исключения TUN (bypass) здесь не участвуют: directPackages идут мимо прокси, но остаются в туннеле.
+                    // ЧС: приложения чёрного списка идут через VPN, остальные в туннель не попадают.
+                    if (spec.packageRules && routing.proxyPackages.isNotEmpty()) add(buildJsonObject { put("package_name", JsonArray(routing.proxyPackages.map(::JsonPrimitive))); routeTo(RouteTarget.PROXY) })
                     if (spec.packageRules && routing.directPackages.isNotEmpty()) add(buildJsonObject { put("package_name", JsonArray(routing.directPackages.map(::JsonPrimitive))); routeTo(RouteTarget.DIRECT) })
                     // Правила из .srs идут раньше пользовательских доменов: конкретный набор перекрывает общий суффикс.
                     ruleSets.forEach { (set, _) -> add(buildJsonObject { put("rule_set", set.tag); routeTo(set.target) }) }
                     if (routing.blockDomains.isNotEmpty()) add(buildJsonObject { put("domain_suffix", JsonArray(routing.blockDomains.map(::JsonPrimitive))); routeTo(RouteTarget.BLOCK) })
+                    // Явный ЧС перекрывает общий доменный суффикс Белого списка (например, .ru).
+                    if (routing.proxyDomains.isNotEmpty()) add(buildJsonObject { put("domain_suffix", JsonArray(routing.proxyDomains.map(::JsonPrimitive))); routeTo(RouteTarget.PROXY) })
                     if (routing.directDomains.isNotEmpty()) add(buildJsonObject { put("domain_suffix", JsonArray(routing.directDomains.map(::JsonPrimitive))); routeTo(RouteTarget.DIRECT) })
+                    if (routing.torrentDirect) add(buildJsonObject { put("protocol", "bittorrent"); routeTo(RouteTarget.DIRECT) })
+                    if (routing.directCidrs.isNotEmpty()) add(buildJsonObject { put("ip_cidr", JsonArray(routing.directCidrs.map(::JsonPrimitive))); routeTo(RouteTarget.DIRECT) })
                 })
             })
             put("experimental", buildJsonObject { put("clash_api", buildJsonObject { put("external_controller", "127.0.0.1:${spec.port}"); put("secret", spec.secret) }) })

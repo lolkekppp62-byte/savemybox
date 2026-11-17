@@ -5,7 +5,9 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -68,6 +70,7 @@ import java.util.Date
     val scope = rememberCoroutineScope()
     fun action(block:suspend ()->Unit) { scope.launch { try { app.ready.await();block() } catch(e:CancellationException) { throw e } catch(e:Exception) { error=e.message ?: "Операция не выполнена" } } }
     fun scan(id:String?=null) { action { app.engine.checkAll(id) } }
+    fun scanNodes(ids:Set<String>) { action { app.engine.checkNodes(ids) } }
     val connected = connection.phase==Phase.CONNECTED || connection.phase==Phase.CONNECTING
     BoxTheme(data.settings) {
         Scaffold(containerColor = Color.Transparent, topBar = {
@@ -94,12 +97,34 @@ import java.util.Date
             Box(Modifier.padding(padding).fillMaxSize()) {
                 when (page) {
                     "Журнал" -> Logs(app)
-                    "Обход VPN" -> AppBypassScreen(context, data.settings.bypassPackages, { selected ->
-                        action { app.repository.updateSettings { it.copy(bypassPackages = selected) };app.engine.applySettings() }
+                    "Приложения" -> AppBypassScreen(context, data.settings, { transform ->
+                        action { app.repository.updateSettings(transform);app.engine.applySettings() }
                     }, { page = "" })
-                    "Российские приложения" -> RussianListScreen(data.settings.russianPackages, { selected ->
-                        action { app.repository.updateSettings { it.copy(russianPackages = selected) };app.engine.applySettings() }
+                    "Домены" -> RussianListScreen(data.settings, { transform ->
+                        action { app.repository.updateSettings(transform);app.engine.applySettings() }
                     }, { page = "" })
+                    "Подписки" -> SubscriptionScreen(context, data.settings,
+                        onAdd = { sub -> action {
+                            app.repository.updateSettings { it.copy(subscriptions = it.subscriptions + sub) }
+                            SubscriptionWorker.schedule(context, sub)
+                            if (sub.refresh == SubscriptionRefresh.ON_START) SubscriptionWorker.refreshNow(context, sub.id)
+                            app.journal.add("Подписка добавлена")
+                        } },
+                        onUpdate = { sub -> action {
+                            app.repository.updateSettings { s -> s.copy(subscriptions = s.subscriptions.map { if (it.id == sub.id) sub else it }) }
+                            SubscriptionWorker.schedule(context, sub)
+                        } },
+                        onRemove = { id -> action {
+                            app.repository.updateSettings { s -> s.copy(subscriptions = s.subscriptions.filterNot { it.id == id }) }
+                            SubscriptionWorker.cancel(context, id)
+                        } },
+                        onRefresh = { id -> action { SubscriptionWorker.refreshNow(context, id) } },
+                        onImport = { raw -> action {
+                            val nodes = withContext(Dispatchers.Default) { Importer.parse(raw) }
+                            app.repository.add(nodes);app.engine.applySettings()
+                            app.journal.add("Добавлено узлов: ${nodes.size}")
+                        } },
+                        back = { page = "" })
                     else -> if (tab == 0) MainPane(data, connection, progress, live, checking, loadError,
                         onToggle = { if (connected) onDisconnect() else onConnect() },
                         onScan = { scan() },
@@ -111,10 +136,10 @@ import java.util.Date
                             app.repository.updateSettings(transform)
                             val next = app.repository.state.value.settings
                             if (old.intervalMinutes != next.intervalMinutes) com.savemy.singboxfork.work.RefreshWorker.schedule(app, next.intervalMinutes)
-                            if (next.subscriptions.isNotEmpty()) SubscriptionWorker.schedule(context, next.subIntervalMinutes) else SubscriptionWorker.cancel(context)
+                            if (next.subscriptions.isNotEmpty()) SubscriptionWorker.sync(context, next.subscriptions) else SubscriptionWorker.cancelAll(context)
                             if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes) != next) app.engine.applySettings()
                         }
-                    }, openApps = { page = "Обход VPN" }, openRussian = { page = "Российские приложения" }, openLogs = { page = "Журнал" }, context = context)
+                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" }, openSubscriptions = { page = "Подписки" }, openLogs = { page = "Журнал" }, context = context)
                 }
             }
         }
@@ -147,6 +172,8 @@ import java.util.Date
             onCheck = { id -> scan(id) },
             onMark = { node, mark -> action { app.repository.mark(node.id, mark);app.engine.applySettings() } },
             onDelete = { node -> action { app.repository.remove(node.id);app.engine.applySettings() } },
+            onCheckMany = { ids -> scanNodes(ids) },
+            onDeleteMany = { ids -> action { app.repository.removeAll(ids);app.engine.applySettings() } },
             onRefreshSub = { refreshSubscriptions(context, app) },
             onOpenSettings = { sheet = false;tab = 1 })
     }
@@ -259,14 +286,18 @@ import java.util.Date
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable private fun ServersSheet(data: AppData, connection: ConnectionState, progress: CheckProgress?, live: Map<String, NodeResult>,
                                     checking: Boolean, onDismiss: () -> Unit, onAdd: () -> Unit, onScan: () -> Unit,
                                     onFilter: (NodeFilter) -> Unit, onSelect: (Node) -> Unit, onCheck: (String) -> Unit,
                                     onMark: (Node, Mark) -> Unit, onDelete: (Node) -> Unit, onRefreshSub: () -> Unit,
+                                    onCheckMany: (Set<String>) -> Unit, onDeleteMany: (Set<String>) -> Unit,
                                     onOpenSettings: () -> Unit) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var pendingDelete by remember { mutableStateOf<Node?>(null) }
+    // Долгое нажатие включает режим выделения: несколько узлов проверяются или удаляются сразу.
+    var choosing by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Palette.Surface) {
         Column(Modifier.fillMaxHeight(.92f).padding(horizontal = 20.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -281,10 +312,19 @@ import java.util.Date
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Filters(data.settings.filter, onFilter)
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onScan, enabled = !checking && data.nodes.isNotEmpty()) {
-                    Text(if (checking) "Проверка…" else "Проверить все")
+                if (choosing) {
+                    TextButton({ picked = data.filtered().map { it.id }.toSet() }) { Text("Выбрать все") }
+                    TextButton({ choosing = false;picked = emptySet() }) { Text("Снять") }
+                } else {
+                    TextButton(onClick = onScan, enabled = !checking && data.nodes.isNotEmpty()) {
+                        Text(if (checking) "Проверка…" else "Проверить все")
+                    }
                 }
             }
+            if (choosing) Text(
+                "Выбрано: ${picked.size}. Зажмите карточку, чтобы отметить ещё.",
+                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.Cyan
+            )
             if (checking) ProgressStrip(progress)
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
                 item(key = "subs-title") { SheetTitle("Подписки · ${data.settings.subscriptions.size}") }
@@ -301,9 +341,29 @@ import java.util.Date
                         style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
                 }
                 items(data.filtered(), key = { it.id }) { node ->
-                    ServerRow(node, node.id == connection.activeId, checking, live[node.id], onSelect, onCheck, onMark, { pendingDelete = node })
+                    ServerRow(node, node.id == connection.activeId, checking, live[node.id],
+                        choosing = choosing, picked = node.id in picked,
+                        onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
+                        onLongPress = { choosing = true;picked = picked + node.id },
+                        onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id })
                 }
                 item(key = "footer") { Spacer(Modifier.height(12.dp)) }
+            }
+            if (choosing) Surface(
+                shape = Palette.CardShape, color = Palette.Cyan.copy(alpha = .10f),
+                border = BorderStroke(1.dp, Palette.Cyan.copy(alpha = .30f)), modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { onCheckMany(picked);choosing = false;picked = emptySet() },
+                        enabled = picked.isNotEmpty() && !checking
+                    ) { Text("Проверить выбранные · ${picked.size}") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        onClick = { onDeleteMany(picked);choosing = false;picked = emptySet() },
+                        enabled = picked.isNotEmpty()
+                    ) { Text("Удалить", color = Palette.Rose) }
+                }
             }
         }
     }
@@ -314,35 +374,50 @@ import java.util.Date
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable private fun ServerRow(node: Node, active: Boolean, checking: Boolean, live: NodeResult?,
-                                  onSelect: (Node) -> Unit, onCheck: (String) -> Unit, onMark: (Node, Mark) -> Unit, onDelete: () -> Unit) {
+                                  choosing: Boolean, picked: Boolean,
+                                  onSelect: (Node) -> Unit, onCheck: (String) -> Unit, onMark: (Node, Mark) -> Unit, onDelete: () -> Unit,
+                                  onLongPress: () -> Unit, onTogglePick: () -> Unit) {
     val status = live?.status ?: node.status
     val latency = live?.latencyMs ?: node.latencyMs
+    val scale by animateFloatAsState(
+        if (picked) 1f else .98f,
+        spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "Выделение узла"
+    )
     Surface(shape = Palette.CardShape,
-        color = if (active) Palette.Cyan.copy(alpha = .10f) else Palette.CardFill,
-        border = BorderStroke(1.dp, if (active) Palette.Cyan.copy(alpha = .45f) else Palette.CardStroke),
-        modifier = Modifier.fillMaxWidth()) {
+        color = if (picked || active) Palette.Cyan.copy(alpha = .10f) else Palette.CardFill,
+        border = BorderStroke(1.dp, if (picked || active) Palette.Cyan.copy(alpha = .45f) else Palette.CardStroke),
+        modifier = Modifier.fillMaxWidth().graphicsLayer { scaleX = scale;scaleY = scale }
+            .combinedClickable(onClick = { if (choosing) onTogglePick() }, onLongClick = onLongPress)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (choosing) {
+                    Checkbox(picked, { onTogglePick() }, colors = CheckboxDefaults.colors(checkedColor = Palette.Cyan))
+                    Spacer(Modifier.width(4.dp))
+                }
                 Column(Modifier.weight(1f)) {
                     Text((if (node.mark == Mark.BL) "BL · " else "") + node.name, style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${node.protocol.uppercase()} · ${statusText(status)}", style = MaterialTheme.typography.bodySmall,
+                    Text("${node.protocol.uppercase()} · ${statusText(status)}", style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                         color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 PingBadge(latency, status)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Mark.entries.forEach { mark ->
-                    FilterChip(selected = node.mark == mark, onClick = { onMark(node, mark) },
-                        label = { Text(if (mark == Mark.NONE) "Обычный" else mark.name) })
+            if (!choosing) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Mark.entries.forEach { mark ->
+                        FilterChip(selected = node.mark == mark, onClick = { onMark(node, mark) },
+                            label = { Text(if (mark == Mark.NONE) "Обычный" else mark.name) })
+                    }
                 }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { onSelect(node) }, enabled = node.mark != Mark.BL) { Text("Выбрать") }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = { onCheck(node.id) }, enabled = !checking) { Icon(Icons.Rounded.Refresh, "Проверить узел") }
-                IconButton(onClick = onDelete) { Icon(Icons.Rounded.DeleteOutline, "Удалить узел") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onSelect(node) }, enabled = node.mark != Mark.BL) { Text("Выбрать") }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { onCheck(node.id) }, enabled = !checking) { Icon(Icons.Rounded.Refresh, "Проверить узел") }
+                    IconButton(onClick = onDelete) { Icon(Icons.Rounded.DeleteOutline, "Удалить узел") }
+                }
             }
         }
     }

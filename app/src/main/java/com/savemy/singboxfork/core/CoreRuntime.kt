@@ -10,11 +10,11 @@ import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.OverrideOptions
 import io.nekohasekai.libbox.SetupOptions
-import io.nekohasekai.libbox.go
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import java.io.File
 import java.net.ServerSocket
 import java.util.UUID
@@ -35,6 +35,10 @@ class CoreRuntime(
     private var api: LocalApi? = null
     private var signature = ""
     private var initialized = false
+    /** Из паков подтягиваются только реально установленные приложения. */
+    private val installed: Set<String> by lazy {
+        runCatching { context.packageManager.getInstalledPackages(0).map { it.packageName }.toSet() }.getOrDefault(emptySet())
+    }
     var port = 0
         private set
     var secret = ""
@@ -66,7 +70,8 @@ class CoreRuntime(
     private fun spec(data: AppData, vpn: Boolean) = CoreSpec(
         data, vpn, port, secret, coreLog.path, mtu(data.settings), android.os.Build.VERSION.SDK_INT >= 29,
         ruleSetsDir = rulesDir.path,
-        advancedJson = data.settings.advancedJson.takeIf { data.settings.advancedMode && it.isNotBlank() }
+        advancedJson = data.settings.advancedJson.takeIf { data.settings.advancedMode && it.isNotBlank() },
+        installedPackages = installed
     )
 
     fun start(data: AppData, vpn: BoxVpnService?) {

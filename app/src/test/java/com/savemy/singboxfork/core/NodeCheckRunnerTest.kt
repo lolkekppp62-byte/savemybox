@@ -52,6 +52,18 @@ class NodeCheckRunnerTest {
         assertTrue(NodeCheckRunner(FakeTcp(emptySet())).run(listOf(broken), FakeProxy()).isEmpty())
     }
 
+    // Проверка выбранных узлов: остальные не трогаются и в результат не попадают.
+    @Test fun selectedNodesAreCheckedOnly() = runBlocking {
+        val first = node("trojan://p@one.example:443#One", "one")
+        val second = node("trojan://p@two.example:443#Two", "two")
+        val tcp = FakeTcp(emptySet())
+        val checked = NodeCheckRunner(tcp).run(listOf(second), FakeProxy())
+        assertEquals(listOf("two"), checked.map { it.name })
+        assertEquals(listOf("two.example"), tcp.calls)
+        assertEquals(CheckStatus.ALIVE, checked.single().status)
+        assertTrue(checked.none { it.id == first.id })
+    }
+
     // Живой сосед обязателен: без него срабатывает откат на URLTest по всем узлам.
     @Test fun deadServerGetsNoLatency() = runBlocking {
         val dead = node("trojan://p@dead.example:443#D", "dead")

@@ -59,6 +59,15 @@ class Repository(context: Context) {
     suspend fun add(nodes: List<Node>) = change { it.copy(nodes = it.nodes + nodes) }
     suspend fun mark(id: String, mark: Mark) = change { d -> d.copy(nodes = d.nodes.map { if(it.id == id) it.copy(mark=mark) else it }) }
     suspend fun remove(id: String) = change { it.copy(nodes = it.nodes.filterNot { n -> n.id == id }) }
+    /** Массовое удаление из мультивыбора: отсутствующие id просто игнорируются. */
+    suspend fun removeAll(ids: Collection<String>) = change { d ->
+        val doomed = ids.toSet()
+        d.copy(nodes = d.nodes.filterNot { it.id in doomed })
+    }
+    suspend fun mark(mark: Mark, ids: Collection<String>) = change { d ->
+        val chosen = ids.toSet()
+        d.copy(nodes = d.nodes.map { if (it.id in chosen) it.copy(mark = mark) else it })
+    }
     // Результаты проверки не восстанавливают удалённый узел и не перезаписывают свежую отметку BL/WL.
     suspend fun results(nodes: List<Node>) = change { d ->
         val updates = nodes.associateBy { it.id }

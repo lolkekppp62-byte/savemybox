@@ -31,13 +31,15 @@ class Engine(private val context:Context,private val repo:Repository,private val
     private val runner=NodeCheckRunner()
     private var health:Job?=null
     @Volatile private var scanJob:Job?=null
+    /** Кандидаты зависят от режима: подписки, привязанные к другому списку, не участвуют. */
+    private fun candidates(data:AppData)=data.candidates(data.settings.routingMode)
 
     suspend fun connect(vpn:BoxVpnService)=withContext(Dispatchers.IO) { lock.withLock {
         if(mutable.value.phase==Phase.CONNECTED) return@withLock
         mutable.value=ConnectionState(Phase.CONNECTING)
         try {
             runtime.stop(); val data=repo.state.value
-            val selected=data.candidates().firstOrNull { it.id==data.settings.selectedId } ?: data.candidates().firstOrNull()
+            val selected=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
             requireNotNull(selected) { "Нет узла вне BL в выбранном фильтре" }
             runtime.start(data,vpn)
             mutable.value=ConnectionState(Phase.CONNECTED,selected.id)
@@ -57,20 +59,23 @@ class Engine(private val context:Context,private val repo:Repository,private val
             health=null;runtime.stop();mutable.value=ConnectionState();journal.add("VPN отключён")
         }
     }
-    suspend fun checkAll(id:String?=null):List<Node> = withContext(Dispatchers.IO) { lock.withLock {
+    suspend fun checkAll(id:String?=null):List<Node> = scan { data -> if(id==null) data.filtered() else data.nodes.filter { it.id==id } }
+    /** Проверка только отмеченных узлов: остальные не трогаем. */
+    suspend fun checkNodes(ids:Collection<String>):List<Node> = scan { data -> data.nodes.filter { it.id in ids } }
+    private suspend fun scan(pick:(AppData)->List<Node>):List<Node> = withContext(Dispatchers.IO) { lock.withLock {
         scanJob=currentCoroutineContext()[Job]
         checking.value=true
         results.value=emptyMap()
         val temporary=mutable.value.phase!=Phase.CONNECTED
         try {
             val data=repo.state.value
-            val nodes=if(id==null) data.filtered() else data.nodes.filter { it.id==id }
+            val nodes=pick(data)
             if(nodes.isEmpty()) return@withLock emptyList()
             if(temporary) { runtime.stop();runtime.start(data,null) }
             else if(runtime.stale(data)) {
                 // Горячая перезагрузка сохраняет службу; новый TUN учитывает изменённые исключения.
                 runtime.reload(data)
-                val current=data.candidates().firstOrNull { it.id==data.settings.selectedId } ?: data.candidates().firstOrNull()
+                val current=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
                 mutable.value=mutable.value.copy(activeId=current?.id)
             }
             val result=measure(nodes,attempts=1,report=true)
@@ -101,7 +106,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
             val activeResult=measure(listOf(active),attempts=3).firstOrNull() ?: return@withLock
             repo.results(listOf(activeResult))
             if(activeResult.latencyMs!=null) return@withLock
-            val alternatives=measure(data.candidates().filter { it.id!=active.id },attempts=1)
+            val alternatives=measure(candidates(data).filter { it.id!=active.id },attempts=1)
             repo.results(alternatives)
             val best=SmartRouter.bestFallback(activeResult,alternatives)
             if(best!=null) {
@@ -117,7 +122,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
         try {
             val data=repo.state.value
             runtime.reload(data)
-            val selected=data.candidates().firstOrNull { it.id==data.settings.selectedId } ?: data.candidates().firstOrNull()
+            val selected=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
             mutable.value=mutable.value.copy(activeId=selected?.id,notice="Настройки применены")
         } catch(_:Exception) { failConnection("Настройки не применены: VPN остановлен. Проверьте фильтр и конфигурацию.") }
     } }
