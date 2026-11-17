@@ -21,7 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,updater:Updater,context: Context,onRoamNow:()->Unit) {
+@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,updater:Updater,context: Context,onRoamNow:()->Unit,onConnectVpn:()->Unit) {
     val s=data.settings
     val update by updater.state.collectAsStateWithLifecycle()
     var custom by remember { mutableStateOf("") };var unit by remember { mutableStateOf("minutes") };var error by remember { mutableStateOf<String?>(null) }
@@ -39,6 +39,8 @@ import kotlinx.coroutines.withContext
             if(s.theme=="newyear") Text("Тихий снег. Анимация учитывает системное отключение анимаций.")
         } }
         item { Section("Безопасность") {
+            Button(onClick=onConnectVpn,Modifier.fillMaxWidth()) { Text("Подключить VPN сейчас") }
+            Text("Сразу запросит разрешение VPN и подключится к выбранному узлу.",style=MaterialTheme.typography.bodySmall)
             Toggle("Kill Switch (блокировать трафик без VPN)",s.killSwitch) { value -> change { it.copy(killSwitch=value) } }
             Text("Если туннель упадёт, весь трафик будет заблокирован до восстановления VPN.",style=MaterialTheme.typography.bodySmall)
             Toggle("Запускать VPN при загрузке устройства",s.startOnBoot) { value -> change { it.copy(startOnBoot=value) } }
@@ -57,16 +59,16 @@ import kotlinx.coroutines.withContext
                 Text("✓ Оптимизация батареи отключена",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)
             }
         } }
-        item { Section("Подписки") {
-            Text("Текущие подписки: ${s.subscriptions.size}")
+        item { Section("Боксы") {
+            Text("Текущие боксы: ${s.subscriptions.size}")
             s.subscriptions.forEach { sub ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.SpaceBetween) {
-                    Text(sub.name, Modifier.weight(1f), style=MaterialTheme.typography.bodySmall)
-                    TextButton(onClick={ change { it.copy(subscriptions=it.subscriptions.filterNot { sb -> sb.id==sub.id }) } }) { Text("Удалить") }
+                    Text(sub.name.ifBlank { "Бокс" }, Modifier.weight(1f), style=MaterialTheme.typography.bodySmall)
+                    Text("${sub.sources().size} ссылок · ${data.nodes.count { it.id.startsWith("${sub.id}::") }} узлов", style=MaterialTheme.typography.bodySmall)
                 }
             }
-            OutlinedButton(openSubscriptions) { Text("Подписки, QR и расписание · ${s.subscriptions.size}") }
-            Text("Ссылка, .txt, Base64, JSON или QR-код. Для каждой подписки задаются режим БС/ЧС и обновление.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(openSubscriptions) { Text("Боксы, ссылки и проверка · ${s.subscriptions.size}") }
+            Text("Создайте бокс и добавьте одну или несколько ссылок. Каждый бокс обновляется и проверяется отдельно.",style=MaterialTheme.typography.bodySmall)
         } }
         item { Section("Маршрутизация") {
             Text("Режим")

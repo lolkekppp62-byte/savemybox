@@ -22,7 +22,7 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
         val settings = app.repository.state.value.settings
         val target = inputData.getString(KEY_SUB)
         val subs = settings.subscriptions.filter { it.enabled && (target == null || it.id == target) }
-            .filter { it.url.isNotBlank() }
+            .filter { it.sources().isNotEmpty() }
         if (subs.isEmpty()) return Result.success()
         return try {
             subs.forEach { sub -> refresh(app, sub) }
@@ -35,19 +35,33 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
     }
 
     private suspend fun refresh(app: BoxApp, sub: Subscription) {
-        val raw = withContext(Dispatchers.IO) {
-            URL(sub.url).openConnection().apply {
-                connectTimeout = 15_000; readTimeout = 30_000
-                setRequestProperty("User-Agent", "SavemyBox/1.0")
-            }.getInputStream().use { stream ->
-                val bytes = stream.readNBytes(1_000_001)
-                require(bytes.size <= 1_000_000) { "Список слишком большой" }
-                bytes.decodeToString()
+        val urls = sub.sources()
+        var fetched = 0
+        val merged = ArrayList<Node>()
+        var lastError: Exception? = null
+        for (url in urls) {
+            try {
+                val raw = withContext(Dispatchers.IO) {
+                    URL(url).openConnection().apply {
+                        connectTimeout = 15_000; readTimeout = 30_000
+                        setRequestProperty("User-Agent", "SavemyBox/1.0")
+                    }.getInputStream().use { stream ->
+                        val bytes = stream.readNBytes(1_000_001)
+                        require(bytes.size <= 1_000_000) { "Список слишком большой" }
+                        bytes.decodeToString()
+                    }
+                }
+                // Base64, .txt-список, JSON и набор URI-ссылок разбирает один импортёр.
+                merged += SubscriptionManager.parse(raw, Mark.NONE)
+                fetched++
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
             }
         }
-        // Base64, .txt-список, JSON и набор URI-ссылок разбирает один импортёр.
-        val nodes = SubscriptionManager.parse(raw, Mark.NONE)
-        if (nodes.isNotEmpty()) app.repository.addFromSubscription(sub.id, nodes)
+        if (fetched == 0 && urls.isNotEmpty()) throw (lastError ?: IllegalStateException("Не удалось обновить бокс"))
+        if (merged.isNotEmpty()) app.repository.addFromSubscription(sub.id, merged)
         app.repository.updateSettings { s ->
             s.copy(subscriptions = s.subscriptions.map { if (it.id == sub.id) it.copy(lastUpdated = System.currentTimeMillis()) else it })
         }
@@ -62,7 +76,7 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
         fun schedule(context: Context, sub: Subscription) {
             val manager = WorkManager.getInstance(context)
             val minutes = SubscriptionManager.minutes(sub.refresh)
-            if (!sub.enabled || minutes == null || sub.url.isBlank()) {
+            if (!sub.enabled || minutes == null || sub.sources().isEmpty()) {
                 manager.cancelUniqueWork(workName(sub.id))
                 return
             }
@@ -76,14 +90,14 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
 
         fun sync(context: Context, subs: List<Subscription>) = subs.forEach { schedule(context, it) }
 
-        /** «Обновить все»: каждая подписка скачивается своей задачей, параллельно. */
+        /** «Обновить все»: каждый бокс скачивается своей задачей, параллельно. */
         fun refreshAllNow(context: Context, subs: List<Subscription>) {
-            subs.filter { it.enabled && it.url.isNotBlank() }.forEach { refreshNow(context, it.id) }
+            subs.filter { it.enabled && it.sources().isNotEmpty() }.forEach { refreshNow(context, it.id) }
         }
 
-        /** Подписки с обновлением «при запуске» дёргаются один раз после старта приложения. */
+        /** Боксы с обновлением «при запуске» дёргаются один раз после старта приложения. */
         fun refreshOnStart(context: Context, subs: List<Subscription>) {
-            subs.filter { it.enabled && it.refresh == SubscriptionRefresh.ON_START && it.url.isNotBlank() }
+            subs.filter { it.enabled && it.refresh == SubscriptionRefresh.ON_START && it.sources().isNotEmpty() }
                 .forEach { refreshNow(context, it.id) }
         }
 

@@ -13,6 +13,15 @@ class SubscriptionTest {
 
     private fun node() = Importer.parse("trojan://p@example.com:443#T").single()
 
+    @Test fun boxSourcesFallBackToSingleUrl() {
+        // Старый бокс с одним полем url продолжает работать.
+        assertEquals(listOf("https://a/list.txt"), Subscription(url = "https://a/list.txt").sources())
+        assertEquals(emptyList<String>(), Subscription().sources())
+        // Несколько ссылок бокса: пустые строки отбрасываются, url — запасной вариант.
+        val box = Subscription(url = "https://old/list.txt", urls = listOf("https://a/one.txt", " ", "https://b/two.txt"))
+        assertEquals(listOf("https://a/one.txt", "https://b/two.txt"), box.sources())
+    }
+
     @Test fun plainTextListIsParsed() {
         val text = "# Список\nvless://$uuid@a.example:443?security=tls#A\ntrojan://p@b.example:443#B\n\n"
         val nodes = SubscriptionManager.parse(text)

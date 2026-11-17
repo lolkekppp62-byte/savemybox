@@ -6,7 +6,6 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,8 +29,8 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * Экран подписок: ссылка, .txt/Base64-список, JSON, URI-узлы, QR камерой или из галереи.
- * Вкладки БС/ЧС и параллельное обновление всех ссылок.
+ * Боксы: контейнеры узлов. В бокс можно добавить одну или несколько ссылок,
+ * обновлять и проверять его отдельно от остальных.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable fun SubscriptionScreen(
@@ -45,25 +44,31 @@ import java.util.Date
     onRefreshAll: () -> Unit,
     onImport: (String) -> Unit,
     onCheck: () -> Unit,
+    onCheckBox: (String) -> Unit,
     back: () -> Unit
 ) {
+    var boxName by remember { mutableStateOf("") }
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var modeFilter by remember { mutableStateOf<SubscriptionMode?>(null) }
     var suggestCheck by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun submit(raw: String) {
+    fun submit(raw: String, name: String = "") {
         val value = raw.trim()
         if (value.isEmpty()) { error = "Вставьте ссылку, JSON или список узлов"; return }
         error = null
-        if (SubscriptionManager.looksLikeUrl(value)) {
-            onAdd(Subscription(url = value, name = SubscriptionManager.title(value, value), source = "url"))
+        val lines = value.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val urls = lines.filter { SubscriptionManager.looksLikeUrl(it) }
+        if (urls.isNotEmpty()) {
+            val title = name.trim().ifBlank { SubscriptionManager.title(value, urls.first()) }
+            onAdd(Subscription(url = urls.first(), urls = urls, name = title, source = "url"))
         } else {
-            // Список узлов или JSON добавляется сразу, без расписания.
+            // Список узлов или JSON — без бокса/расписания, как ручной импорт.
             onImport(value)
         }
         text = ""
+        boxName = ""
     }
 
     val camera = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -87,15 +92,15 @@ import java.util.Date
     ) {
         item {
             TextButton(back) { Text("Назад") }
-            Text("Подписки", style = MaterialTheme.typography.headlineMedium)
+            Text("Боксы", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "HTTPS-ссылка, raw GitHub или .txt, Base64, JSON, URI-ссылки vless/trojan/ss/hy2/tuic и QR-код.",
+                "Бокс объединяет узлы: создайте его и добавьте одну или несколько ссылок (HTTPS, raw GitHub, .txt, Base64, JSON, QR). Каждый бокс обновляется и проверяется отдельно.",
                 style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted
             )
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button({ onRefreshAll(); suggestCheck = true }) { Text("Обновить все подписки") }
+                Button({ onRefreshAll(); suggestCheck = true }) { Text("Обновить все боксы") }
             }
         }
         if (suggestCheck) item {
@@ -105,7 +110,7 @@ import java.util.Date
             ) {
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Узлы обновляются в фоне. Прогнать быструю проверку?", Modifier.weight(1f),
+                        "Боксы обновляются в фоне. Прогнать быструю проверку?", Modifier.weight(1f),
                         style = MaterialTheme.typography.bodySmall, color = Palette.Cyan
                     )
                     TextButton({ suggestCheck = false; onCheck() }) { Text("Проверить", color = Palette.Cyan) }
@@ -119,18 +124,22 @@ import java.util.Date
                 border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Добавить", style = MaterialTheme.typography.titleMedium)
+                    Text("Создать бокс", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
-                        text, { text = it; error = null }, label = { Text("Ссылка, JSON или список узлов") },
+                        boxName, { boxName = it }, label = { Text("Название бокса (необязательно)") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    OutlinedTextField(
+                        text, { text = it; error = null },
+                        label = { Text("Ссылки (по одной на строку) или узлы/JSON") },
                         modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp), minLines = 2, isError = error != null
                     )
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button({ submit(text) }, enabled = text.isNotBlank()) { Text("Добавить") }
+                        Button({ submit(text, boxName) }, enabled = text.isNotBlank()) { Text("Создать") }
                         OutlinedButton({
                             camera.launch(ScanOptions().apply {
-                                // Форматы не ограничиваются: QR подписки читается наравне с остальными.
-                                setPrompt("Наведите камеру на QR-код подписки")
+                                setPrompt("Наведите камеру на QR-код")
                                 setBeepEnabled(false)
                                 setOrientationLocked(false)
                             })
@@ -142,12 +151,12 @@ import java.util.Date
         }
         if (shown.isEmpty()) item {
             Text(
-                "Подписок пока нет. Узлы, добавленные вручную, остаются в списке серверов.",
+                "Боксов пока нет. Узлы, добавленные вручную, остаются в общем списке.",
                 color = Palette.TextMuted, style = MaterialTheme.typography.bodySmall
             )
         }
         items(shown, key = { it.id }) { sub ->
-            SubscriptionCard(sub, nodesOf(sub), onUpdate, onRemove, onRefresh)
+            SubscriptionCard(sub, nodesOf(sub), onUpdate, onRemove, onRefresh, onCheckBox)
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
@@ -157,8 +166,8 @@ import java.util.Date
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         listOf(
             null to "Все",
-            SubscriptionMode.BLACKLIST to "ЧС (Чёрный список)",
-            SubscriptionMode.WHITELIST to "БС (Белый список)"
+            SubscriptionMode.BLACKLIST to "ЧС",
+            SubscriptionMode.WHITELIST to "БС"
         ).forEach { (mode, label) ->
             FilterChip(
                 selected = value == mode, onClick = { onPick(mode) }, label = { Text(label) },
@@ -171,16 +180,18 @@ import java.util.Date
     }
 }
 
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun SubscriptionCard(
     sub: Subscription,
     subNodes: List<Node>,
     onUpdate: (Subscription) -> Unit,
     onRemove: (String) -> Unit,
-    onRefresh: (String) -> Unit
+    onRefresh: (String) -> Unit,
+    onCheckBox: (String) -> Unit
 ) {
+    var extraLink by remember(sub.id) { mutableStateOf("") }
     val dead = SubscriptionManager.isDead(subNodes)
+    val sources = sub.sources()
     Surface(
         shape = Palette.CardShape,
         color = if (dead) Palette.Rose.copy(alpha = .08f) else Palette.CardFill,
@@ -191,11 +202,11 @@ import java.util.Date
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        sub.name.ifBlank { "Подписка" }, style = MaterialTheme.typography.titleMedium,
+                        sub.name.ifBlank { "Бокс" }, style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        "${if (sub.url.isBlank()) "вставленный список" else sub.url.take(56)} · ${formatStamp(sub.lastUpdated)}",
+                        "${sources.size} ссылок · ${formatStamp(sub.lastUpdated)}",
                         style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                         color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
@@ -205,14 +216,19 @@ import java.util.Date
                     colors = SwitchDefaults.colors(checkedTrackColor = Palette.Cyan, checkedThumbColor = Palette.Ink)
                 )
             }
+            if (sources.isNotEmpty()) {
+                Text(
+                    sources.joinToString("\n") { it.take(64) },
+                    style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "${subNodes.size} узлов · живых ${SubscriptionManager.aliveCount(subNodes)}",
                     style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.TextMuted
                 )
-                if (dead) Text(
-                    "Не отвечает", style = MaterialTheme.typography.labelMedium, color = Palette.Rose
-                )
+                if (dead) Text("Не отвечает", style = MaterialTheme.typography.labelMedium, color = Palette.Rose)
             }
             Text("Режим маршрутизации", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -247,8 +263,23 @@ import java.util.Date
                     FilterChip(selected = sub.refresh == refresh, onClick = { onUpdate(sub.copy(refresh = refresh)) }, label = { Text(label) })
                 }
             }
+            OutlinedTextField(
+                extraLink, { extraLink = it }, label = { Text("Добавить ссылку в бокс") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ onRefresh(sub.id) }, enabled = sub.url.isNotBlank()) { Text("Обновить сейчас") }
+                TextButton(onClick = {
+                    val link = extraLink.trim()
+                    if (SubscriptionManager.looksLikeUrl(link)) {
+                        onUpdate(sub.copy(url = if (sub.url.isBlank()) link else sub.url, urls = (sources + link).distinct()))
+                        extraLink = ""
+                    }
+                }, enabled = SubscriptionManager.looksLikeUrl(extraLink.trim())) { Text("Добавить ссылку") }
+                Spacer(Modifier.weight(1f))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ onRefresh(sub.id) }, enabled = sources.isNotEmpty()) { Text("Обновить") }
+                TextButton({ onCheckBox(sub.id) }, enabled = subNodes.isNotEmpty()) { Text("Проверить бокс") }
                 Spacer(Modifier.weight(1f))
                 TextButton({ onRemove(sub.id) }) { Text("Удалить", color = Palette.Rose) }
             }

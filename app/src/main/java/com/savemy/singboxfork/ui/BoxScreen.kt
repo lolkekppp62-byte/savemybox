@@ -103,12 +103,12 @@ import java.util.Date
                     "Домены" -> RussianListScreen(data.settings, { transform ->
                         action { app.repository.updateSettings(transform);app.engine.applySettings() }
                     }, { page = "" })
-                    "Подписки" -> SubscriptionScreen(context, data.settings, data.nodes,
+                    "Боксы" -> SubscriptionScreen(context, data.settings, data.nodes,
                         onAdd = { sub -> action {
                             app.repository.updateSettings { it.copy(subscriptions = it.subscriptions + sub) }
                             SubscriptionWorker.schedule(context, sub)
-                            if (sub.refresh == SubscriptionRefresh.ON_START) SubscriptionWorker.refreshNow(context, sub.id)
-                            app.journal.add("Подписка добавлена")
+                            if (sub.refresh == SubscriptionRefresh.ON_START && sub.sources().isNotEmpty()) SubscriptionWorker.refreshNow(context, sub.id)
+                            app.journal.add("Бокс добавлен")
                         } },
                         onUpdate = { sub -> action {
                             app.repository.updateSettings { s -> s.copy(subscriptions = s.subscriptions.map { if (it.id == sub.id) sub else it }) }
@@ -126,6 +126,7 @@ import java.util.Date
                             app.journal.add("Добавлено узлов: ${nodes.size}")
                         } },
                         onCheck = { scan() },
+                        onCheckBox = { id -> action { app.engine.checkNodes(data.nodes.filter { it.id.startsWith("${id}::") }.map { it.id }) } },
                         back = { page = "" })
                     else -> if (tab == 0) MainPane(data, connection, progress, live, checking, loadError,
                         onToggle = { if (connected) onDisconnect() else onConnect() },
@@ -144,8 +145,8 @@ import java.util.Date
                             // Канал обновлений и расписания не трогают туннель: перезагрузка нужна только сетевым настройкам.
                             if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes, updateChannel = next.updateChannel) != next) app.engine.applySettings()
                         }
-                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" }, openSubscriptions = { page = "Подписки" }, openLogs = { page = "Журнал" }, updater = app.updater, context = context,
-                        onRoamNow = { action { app.engine.roamNow() } })
+                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" },                     openSubscriptions = { page = "Боксы" }, openLogs = { page = "Журнал" }, updater = app.updater, context = context,
+                        onRoamNow = { action { app.engine.roamNow() } }, onConnectVpn = onConnect)
                 }
             }
         }
@@ -183,7 +184,7 @@ import java.util.Date
             onPingFilter = { value -> action { app.repository.updateSettings { it.copy(pingFilter = value) } } },
             onSort = { value -> action { app.repository.updateSettings { it.copy(nodeSort = value) } } },
             onRefreshSub = { refreshSubscriptions(context, app) },
-            onOpenSettings = { sheet = false;tab = 1 })
+            onOpenSettings = { sheet = false;tab = 1; page = "Боксы" })
     }
 }
 
@@ -331,8 +332,18 @@ import java.util.Date
     // Долгое нажатие включает режим выделения: несколько узлов проверяются или удаляются сразу.
     var choosing by remember { mutableStateOf(false) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var deadOpen by remember { mutableStateOf(false) }
-    val split = NodeView.layout(data.filtered(), live, data.settings.pingFilter, data.settings.nodeSort, data.settings.hideDeadNodes)
+    // Раскрытие «Не отвечает» своё у каждого бокса, ключ — id бокса.
+    var deadOpen by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val filtered = data.filtered()
+    val boxes = data.settings.subscriptions
+    val manual = filtered.filter { node -> boxes.none { node.id.startsWith("${it.id}::") } }
+    val drawNode: @Composable (Node) -> Unit = { node ->
+        ServerRow(node, node.id == connection.activeId, checking, live[node.id],
+            choosing = choosing, picked = node.id in picked,
+            onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
+            onLongPress = { choosing = true; picked = picked + node.id },
+            onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id })
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Palette.Surface) {
         Column(Modifier.fillMaxHeight(.92f).padding(horizontal = 20.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -362,40 +373,43 @@ import java.util.Date
             )
             if (checking) ProgressStrip(progress)
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
-                item(key = "subs-title") { SheetTitle("Подписки · ${data.settings.subscriptions.size}") }
-                if (data.settings.subscriptions.isEmpty()) item(key = "subs-empty") {
-                    Text("Подписок нет. Добавьте ссылку кнопкой «Добавить» или в настройках.",
-                        style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
-                }
-                items(data.settings.subscriptions, key = { it.id }) { sub ->
-                    SubscriptionRow(sub, data.nodes.count { it.id.startsWith("${sub.id}::") }, onRefreshSub, onOpenSettings)
-                }
                 item(key = "panel") {
                     NodePanel(data.settings.pingFilter, data.settings.nodeSort, onPingFilter, onSort)
                 }
-                item(key = "nodes-title") {
-                    SheetTitle("Узлы · ${split.main.size}" + if (split.deadCount > 0) " · не отвечает ${split.deadCount}" else "")
-                }
-                if (split.main.isEmpty()) item(key = "nodes-empty") {
-                    Text("Здесь пока нет узлов. Добавьте ссылку или outbound JSON.",
+                item(key = "boxes-title") { SheetTitle("Боксы · ${boxes.size}") }
+                if (filtered.isEmpty()) item(key = "nodes-empty") {
+                    Text("Здесь пока нет узлов. Создайте бокс со ссылками один раз — узлы будут обновляться сами.",
                         style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
                 }
-                items(split.main, key = { it.id }) { node ->
-                    ServerRow(node, node.id == connection.activeId, checking, live[node.id],
-                        choosing = choosing, picked = node.id in picked,
-                        onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
-                        onLongPress = { choosing = true;picked = picked + node.id },
-                        onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id })
+                boxes.forEach { box ->
+                    val group = filtered.filter { it.id.startsWith("${box.id}::") }
+                    val part = NodeView.layout(group, live, data.settings.pingFilter, data.settings.nodeSort, data.settings.hideDeadNodes)
+                    item(key = "box-${box.id}") {
+                        BoxHeader(box, group, onRefreshSub, onOpenSettings,
+                            { onCheckMany(group.map { it.id }.toSet()) }, checking)
+                    }
+                    if (group.isEmpty()) item(key = "box-empty-${box.id}") {
+                        Text("В боксе нет узлов: обновите его или добавьте ссылку.",
+                            style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
+                    }
+                    items(part.main, key = { it.id }) { node -> drawNode(node) }
+                    if (part.deadCount > 0) item(key = "dead-folder-${box.id}") {
+                        DeadFolder(part.deadCount, box.id in deadOpen) {
+                            deadOpen = if (box.id in deadOpen) deadOpen - box.id else deadOpen + box.id
+                        }
+                    }
+                    if (box.id in deadOpen) items(part.dead, key = { it.id }) { node -> drawNode(node) }
                 }
-                if (split.deadCount > 0) item(key = "dead-folder") {
-                    DeadFolder(split.deadCount, deadOpen) { deadOpen = !deadOpen }
-                }
-                if (deadOpen) items(split.dead, key = { it.id }) { node ->
-                    ServerRow(node, node.id == connection.activeId, checking, live[node.id],
-                        choosing = choosing, picked = node.id in picked,
-                        onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
-                        onLongPress = { choosing = true;picked = picked + node.id },
-                        onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id })
+                if (manual.isNotEmpty()) {
+                    val part = NodeView.layout(manual, live, data.settings.pingFilter, data.settings.nodeSort, data.settings.hideDeadNodes)
+                    item(key = "manual-title") { SheetTitle("Вручную · ${manual.size}") }
+                    items(part.main, key = { it.id }) { node -> drawNode(node) }
+                    if (part.deadCount > 0) item(key = "dead-folder-manual") {
+                        DeadFolder(part.deadCount, "manual" in deadOpen) {
+                            deadOpen = if ("manual" in deadOpen) deadOpen - "manual" else deadOpen + "manual"
+                        }
+                    }
+                    if ("manual" in deadOpen) items(part.dead, key = { it.id }) { node -> drawNode(node) }
                 }
                 item(key = "footer") { Spacer(Modifier.height(12.dp)) }
             }
@@ -508,16 +522,21 @@ import java.util.Date
     }
 }
 
-@Composable private fun SubscriptionRow(sub: Subscription, nodeCount: Int, onRefresh: () -> Unit, onOpenSettings: () -> Unit) {
-    Surface(shape = Palette.CardShape, color = Palette.CardFill, border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+/** Шапка бокса: его узлы идут ниже, обновление и проверка касаются только этого бокса. */
+@Composable private fun BoxHeader(sub: Subscription, group: List<Node>, onRefresh: () -> Unit, onOpenSettings: () -> Unit,
+                                  onCheckBox: () -> Unit, checking: Boolean) {
+    Surface(shape = Palette.CardShape, color = Palette.Cyan.copy(alpha = .07f),
+        border = BorderStroke(1.dp, Palette.Cyan.copy(alpha = .22f)), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(sub.name.ifBlank { "Без названия" }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${formatTime(sub.lastUpdated)} · $nodeCount узлов", style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                Text(sub.name.ifBlank { "Бокс" }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${sub.sources().size} ссылок · ${group.size} узлов · живых ${SubscriptionManager.aliveCount(group)}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                     color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Обновить подписку", tint = Palette.Cyan) }
-            TextButton(onClick = onOpenSettings) { Text("Настроить") }
+            IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Обновить бокс", tint = Palette.Cyan) }
+            TextButton(onClick = onCheckBox, enabled = !checking && group.isNotEmpty()) { Text("Проверить") }
+            IconButton(onClick = onOpenSettings) { Icon(Icons.Rounded.Dns, "Настроить бокс", tint = Palette.Cyan) }
         }
     }
 }

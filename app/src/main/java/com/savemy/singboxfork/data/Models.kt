@@ -28,13 +28,18 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String = "",
     val url: String = "",
+    /** Все ссылки бокса: можно залить одну или несколько. Старое поле url сохраняется для совместимости. */
+    val urls: List<String> = emptyList(),
     val enabled: Boolean = true,
     val lastUpdated: Long = 0,
     val mode: SubscriptionMode = SubscriptionMode.UNIVERSAL,
     val refresh: SubscriptionRefresh = SubscriptionRefresh.H24,
-    /** Откуда добавлена подписка: url, qr, json — только для подписи в интерфейсе. */
+    /** Откуда добавлен бокс: url, qr, json — только для подписи в интерфейсе. */
     val source: String = "url"
-)
+) {
+    /** Действующие источники: список urls или старое одиночное поле url. */
+    fun sources(): List<String> = urls.filter { it.isNotBlank() }.ifEmpty { listOf(url).filter { it.isNotBlank() } }
+}
 @Serializable data class Settings(
     val theme: String = "system", val accent: Long = 0xFF63D6C5,
     val russianServices: Boolean = false,

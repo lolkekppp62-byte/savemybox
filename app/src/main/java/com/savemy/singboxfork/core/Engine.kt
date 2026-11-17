@@ -61,10 +61,10 @@ class Engine(private val context:Context,private val repo:Repository,private val
             health=null;runtime.stop();mutable.value=ConnectionState();journal.add("VPN отключён")
         }
     }
-    suspend fun checkAll(id:String?=null):List<Node> = scan { data -> if(id==null) data.filtered() else data.nodes.filter { it.id==id } }
+    suspend fun checkAll(id:String?=null):List<Node> = scan(autoSelectBest = id==null) { data -> if(id==null) data.filtered() else data.nodes.filter { it.id==id } }
     /** Проверка только отмеченных узлов: остальные не трогаем. */
-    suspend fun checkNodes(ids:Collection<String>):List<Node> = scan { data -> data.nodes.filter { it.id in ids } }
-    private suspend fun scan(pick:(AppData)->List<Node>):List<Node> = withContext(Dispatchers.IO) { lock.withLock {
+    suspend fun checkNodes(ids:Collection<String>):List<Node> = scan(autoSelectBest = false) { data -> data.nodes.filter { it.id in ids } }
+    private suspend fun scan(autoSelectBest:Boolean=false,pick:(AppData)->List<Node>):List<Node> = withContext(Dispatchers.IO) { lock.withLock {
         scanJob=currentCoroutineContext()[Job]
         checking.value=true
         results.value=emptyMap()
@@ -92,8 +92,29 @@ class Engine(private val context:Context,private val repo:Repository,private val
                 journal.add("TCP-этап не пропустил ни одного узла: все проверены через URLTest")
                 mutable.value=mutable.value.copy(notice="TCP-проверка не прошла ни для одного узла — возможен перехват DNS. Все узлы проверены через URLTest.")
             }
-            journal.add("Проверено узлов: ${result.size}; работают: ${result.count { it.latencyMs!=null }}")
-            result.filter { it.latencyMs!=null }.sortedBy { it.latencyMs }
+            val alive = result.filter { it.latencyMs != null }.sortedBy { it.latencyMs!! }
+            journal.add("Проверено узлов: ${result.size}; работают: ${alive.size}")
+            if (autoSelectBest) {
+                val current = repo.state.value
+                val allowed = current.candidates(current.settings.routingMode).map { it.id }.toSet()
+                val best = alive.firstOrNull { it.id in allowed }
+                if (best != null) {
+                    val connected = mutable.value.phase == Phase.CONNECTED
+                    if (connected) {
+                        runtime.select(best.id)
+                        repo.updateSettings { it.copy(selectedId = best.id) }
+                        runtime.acknowledge(repo.state.value)
+                        mutable.value = ConnectionState(Phase.CONNECTED, best.id, "Выбран лучший узел: ${best.name} (${best.latencyMs} мс)")
+                    } else {
+                        repo.updateSettings { it.copy(selectedId = best.id) }
+                        mutable.value = mutable.value.copy(notice = "Выбран лучший узел: ${best.name} (${best.latencyMs} мс)")
+                    }
+                    journal.add("Лучший узел после проверки: ${best.name}")
+                } else if (alive.isNotEmpty()) {
+                    mutable.value = mutable.value.copy(notice = "Рабочие узлы есть, но все отфильтрованы (режим/BL)")
+                }
+            }
+            alive
         } catch(e:CancellationException) { throw e }
         catch(e:Exception) {
             journal.add("Ошибка проверки (${e.javaClass.simpleName})")
