@@ -21,7 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,updater:Updater,context: Context) {
+@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,updater:Updater,context: Context,onRoamNow:()->Unit) {
     val s=data.settings
     val update by updater.state.collectAsStateWithLifecycle()
     var custom by remember { mutableStateOf("") };var unit by remember { mutableStateOf("minutes") };var error by remember { mutableStateOf<String?>(null) }
@@ -85,6 +85,8 @@ import kotlinx.coroutines.withContext
             Text("Приложения из редактируемого списка идут напрямую. Это список пакетов, не автоматическое определение страны.",style=MaterialTheme.typography.bodySmall)
             Toggle("Переключаться на рабочий узел",s.smartRouting) { value -> change { it.copy(smartRouting=value) } }
             Text("Проверка каждые 30 секунд. После трёх неудачных запросов — выбор самого быстрого доступного узла вне BL.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(onRoamNow,Modifier.fillMaxWidth()) { Text("Проверить узел и переключиться сейчас") }
+            Text("Проверяет активный узел: если он не отвечает, сразу переключает на самый быстрый рабочий. Работает при подключённом VPN.",style=MaterialTheme.typography.bodySmall)
         } }
         item { Section("Проверка узлов") {
             Toggle("Убирать нерабочие узлы в папку «Не отвечает»",s.hideDeadNodes) { value -> change { it.copy(hideDeadNodes=value) } }

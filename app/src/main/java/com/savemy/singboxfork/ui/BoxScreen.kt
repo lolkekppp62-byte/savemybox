@@ -132,7 +132,8 @@ import java.util.Date
                         onScan = { scan() },
                         onServers = { sheet = true },
                         onRefreshSubs = { refreshSubscriptions(context, app) },
-                        onCheckMode = { mode -> action { app.repository.updateSettings { it.copy(checkMode = mode) } } })
+                        onCheckMode = { mode -> action { app.repository.updateSettings { it.copy(checkMode = mode) } } },
+                        onCheckNode = { id -> scan(id) })
                     else SettingsScreen(data, change = { transform ->
                         action {
                             val old = app.repository.state.value.settings
@@ -143,7 +144,8 @@ import java.util.Date
                             // Канал обновлений и расписания не трогают туннель: перезагрузка нужна только сетевым настройкам.
                             if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes, updateChannel = next.updateChannel) != next) app.engine.applySettings()
                         }
-                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" }, openSubscriptions = { page = "Подписки" }, openLogs = { page = "Журнал" }, updater = app.updater, context = context)
+                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" }, openSubscriptions = { page = "Подписки" }, openLogs = { page = "Журнал" }, updater = app.updater, context = context,
+                        onRoamNow = { action { app.engine.roamNow() } })
                 }
             }
         }
@@ -187,15 +189,17 @@ import java.util.Date
 
 @Composable private fun MainPane(data: AppData, connection: ConnectionState, progress: CheckProgress?, live: Map<String, NodeResult>,
                                 checking: Boolean, loadError: String?, onToggle: () -> Unit, onScan: () -> Unit,
-                                onServers: () -> Unit, onRefreshSubs: () -> Unit, onCheckMode: (CheckMode) -> Unit) {
+                                onServers: () -> Unit, onRefreshSubs: () -> Unit, onCheckMode: (CheckMode) -> Unit,
+                                onCheckNode: (String) -> Unit) {
     val active = data.nodes.firstOrNull { it.id == connection.activeId }
     val sub = data.settings.subscriptions.firstOrNull { it.enabled } ?: data.settings.subscriptions.firstOrNull()
     val subNodes = sub?.let { s -> data.nodes.count { it.id.startsWith("${s.id}::") } } ?: data.nodes.size
+    val connected = connection.phase == Phase.CONNECTED || connection.phase == Phase.CONNECTING
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ConnectHero(connection, checking, onToggle, onScan)
         CheckModeRow(data.settings.checkMode, onCheckMode)
-        NodePlate(active, live[active?.id], onServers)
+        NodePlate(active, live[active?.id], connected, checking, onServers, onCheckNode)
         SubscriptionCard(sub, subNodes, onRefreshSubs, onServers)
         if (checking) ProgressStrip(progress)
         connection.notice?.let { Text(it, color = Palette.Cyan, style = MaterialTheme.typography.bodyMedium) }
@@ -262,7 +266,7 @@ import java.util.Date
     }
 }
 
-@Composable private fun NodePlate(node: Node?, live: NodeResult?, onOpen: () -> Unit) {
+@Composable private fun NodePlate(node: Node?, live: NodeResult?, connected: Boolean, checking: Boolean, onOpen: () -> Unit, onCheck: (String) -> Unit) {
     val status = live?.status ?: node?.status ?: CheckStatus.UNCHECKED
     val latency = live?.latencyMs ?: node?.latencyMs
     val tcp = live?.tcpMs ?: node?.tcpMs
@@ -270,11 +274,14 @@ import java.util.Date
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Текущий узел", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
+                Text(if (connected) "Текущий узел · скорость" else "Текущий узел", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
                 Text(node?.name ?: "Узел не выбран", style = MaterialTheme.typography.titleMedium, color = Palette.TextPrimary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(nodeMeta(node, status, tcp), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                Text(nodeMeta(node, status, tcp, connected), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                     color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (node != null) {
+                IconButton(onClick = { onCheck(node.id) }, enabled = !checking) { Icon(Icons.Rounded.Refresh, "Проверить узел", tint = Palette.Cyan) }
             }
             PingBadge(latency, status)
             Spacer(Modifier.width(10.dp))
@@ -557,10 +564,14 @@ private fun statusText(status: CheckStatus) = when (status) {
     CheckStatus.ALIVE -> "работает"
 }
 
-private fun nodeMeta(node: Node?, status: CheckStatus, tcp: Long?): String {
-    val parts = mutableListOf(node?.protocol?.uppercase() ?: "—")
+private fun nodeMeta(node: Node?, status: CheckStatus, tcp: Long?, connected: Boolean = false): String {
+    if (node == null) return "Выберите узел, чтобы увидеть скорость"
+    val parts = mutableListOf(node.protocol.uppercase())
     tcp?.let { parts += "TCP $it мс" }
-    node?.checkedAt?.takeIf { it > 0 && status == CheckStatus.ALIVE }?.let { parts += "потери ${node.lossPercent ?: 0}%" }
+    node.checkedAt.takeIf { it > 0 && status == CheckStatus.ALIVE }?.let { parts += "потери ${node.lossPercent ?: 0}%" }
+    if (connected && status == CheckStatus.UNCHECKED && tcp == null) parts += "нажмите «обновить», чтобы измерить"
+    if (connected && status == CheckStatus.TCP_FAILED) parts += "не отвечает — можно переключиться"
+    if (connected && status == CheckStatus.URL_FAILED) parts += "URLTest не прошёл"
     return parts.joinToString(" · ")
 }
 

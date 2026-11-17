@@ -45,6 +45,8 @@ class Engine(private val context:Context,private val repo:Repository,private val
             mutable.value=ConnectionState(Phase.CONNECTED,selected.id)
             journal.add("VPN подключён")
             health?.cancel(); health=scope.launch { while(isActive) { delay(30_000); healthCheck() } }
+            // Сразу меряем активный узел, чтобы на главном экране появилась задержка («скорость»).
+            scope.launch { runCatching { checkNodes(setOf(selected.id)) } }
         } catch(e:CancellationException) { runtime.stop();mutable.value=ConnectionState();throw e }
         catch(e:Exception) {
             runtime.stop(); mutable.value=ConnectionState(Phase.ERROR,notice="Не удалось запустить VPN. Проверьте узел, разрешение VPN и конфигурацию.")
@@ -116,22 +118,49 @@ class Engine(private val context:Context,private val repo:Repository,private val
             tcpOnly=tcpOnly)
     private suspend fun healthCheck() { lock.withLock {
         if(mutable.value.phase!=Phase.CONNECTED || !repo.state.value.settings.smartRouting) return@withLock
-        try {
-            val data=repo.state.value
-            val active=data.nodes.firstOrNull { it.id==mutable.value.activeId } ?: return@withLock
-            val activeResult=measure(listOf(active),attempts=3).firstOrNull() ?: return@withLock
-            repo.results(listOf(activeResult))
-            if(activeResult.latencyMs!=null) return@withLock
-            val alternatives=measure(candidates(data).filter { it.id!=active.id },attempts=1)
-            repo.results(alternatives)
-            val best=SmartRouter.bestFallback(activeResult,alternatives)
-            if(best!=null) {
-                runtime.select(best.id);repo.updateSettings { it.copy(selectedId=best.id) };runtime.acknowledge(repo.state.value)
-                mutable.value=ConnectionState(Phase.CONNECTED,best.id,"Автопереключение: выбран работающий узел")
-                journal.add("Автопереключение после трёх неудачных запросов")
-            } else { mutable.value=mutable.value.copy(notice="Нет работающих узлов. VPN остаётся включённым без прямого обхода.");journal.add("Работающие запасные узлы не найдены") }
-        } catch(e:CancellationException) { throw e } catch(_:Exception) { journal.add("Не удалось выполнить автоматическую проверку") }
+        roamLocked(manual = false)
     } }
+
+    /** Проверить активный узел и при отказе переключиться на самый быстрый рабочий (роуминг/свап). */
+    suspend fun roamNow() = withContext(Dispatchers.IO) { lock.withLock {
+        roamLocked(manual = true)
+    } }
+
+    /** Вызывать только под lock. manual=true — явный запрос из интерфейса, игнорирует настройку автопереключения. */
+    private suspend fun roamLocked(manual: Boolean) {
+        if (mutable.value.phase != Phase.CONNECTED) {
+            if (manual) mutable.value = mutable.value.copy(notice = "Сначала подключите VPN")
+            return
+        }
+        try {
+            val data = repo.state.value
+            val active = data.nodes.firstOrNull { it.id == mutable.value.activeId } ?: run {
+                if (manual) mutable.value = mutable.value.copy(notice = "Активный узел не выбран")
+                return
+            }
+            val activeResult = measure(listOf(active), attempts = 3).firstOrNull() ?: return
+            repo.results(listOf(activeResult))
+            if (activeResult.latencyMs != null) {
+                if (manual) mutable.value = mutable.value.copy(notice = "Узел отвечает: ${activeResult.latencyMs} мс")
+                return
+            }
+            val alternatives = measure(candidates(data).filter { it.id != active.id }, attempts = 1)
+            repo.results(alternatives)
+            val best = SmartRouter.bestFallback(activeResult, alternatives)
+            if (best != null) {
+                runtime.select(best.id); repo.updateSettings { it.copy(selectedId = best.id) }; runtime.acknowledge(repo.state.value)
+                mutable.value = ConnectionState(Phase.CONNECTED, best.id, "Переключено на рабочий узел: ${best.name}")
+                journal.add(if (manual) "Переключение по запросу" else "Автопереключение после трёх неудачных запросов")
+            } else {
+                mutable.value = mutable.value.copy(notice = "Нет работающих узлов. VPN остаётся включённым без прямого обхода.")
+                journal.add("Работающие запасные узлы не найдены")
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) {
+            journal.add("Не удалось выполнить переключение узла")
+            if (manual) mutable.value = mutable.value.copy(notice = "Не удалось проверить узлы для переключения")
+        }
+    }
     fun message(text:String) { mutable.value=mutable.value.copy(notice=text) }
     suspend fun applySettings()=withContext(Dispatchers.IO) { lock.withLock {
         if(mutable.value.phase!=Phase.CONNECTED) return@withLock
