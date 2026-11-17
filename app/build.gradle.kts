@@ -11,9 +11,29 @@ android {
         applicationId = "com.savemy.singboxfork"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // В APK только arm64-v8a: полный набор ABI весит ~350 МБ и часто качается
+        // на телефон неполностью, а установщик затем пишет о проблеме с файлом.
+        ndk { abiFilters += listOf("arm64-v8a") }
+    }
+    // Общий ключ для всех сборок, включая CI. Без него Gradle создаёт на каждом раннере
+    // новый debug-ключ, и очередной APK не ставится поверх предыдущего ("Не удалось
+    // установить приложение"). Ключ дебажный, не для публикации в магазинах.
+    signingConfigs {
+        create("shared") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    }
+    buildTypes {
+        debug { signingConfig = signingConfigs.getByName("shared") }
     }
     buildFeatures { compose = true; buildConfig = true }
     lint {

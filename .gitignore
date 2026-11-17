@@ -8,4 +8,6 @@ app/libs/libbox.json
 SavemyBox-source.zip
 *.jks
 *.keystore
+# Общий debug-ключ лежит в репозитории: так APK из CI ставится поверх прошлых сборок.
+!app/debug.keystore
 __pycache__/
