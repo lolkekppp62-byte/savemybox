@@ -31,7 +31,7 @@ import java.util.Date
 
 /**
  * Экран подписок: ссылка, .txt/Base64-список, JSON, URI-узлы, QR камерой или из галереи.
- * Вкладки БС/ЧС, встроенный каталог бесплатных подписок и параллельное обновление всех ссылок.
+ * Вкладки БС/ЧС и параллельное обновление всех ссылок.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable fun SubscriptionScreen(
@@ -50,7 +50,6 @@ import java.util.Date
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var modeFilter by remember { mutableStateOf<SubscriptionMode?>(null) }
-    var catalog by remember { mutableStateOf(false) }
     var suggestCheck by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -97,7 +96,6 @@ import java.util.Date
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button({ onRefreshAll(); suggestCheck = true }) { Text("Обновить все подписки") }
-                OutlinedButton({ catalog = true }) { Text("Добавить из каталога") }
             }
         }
         if (suggestCheck) item {
@@ -153,11 +151,6 @@ import java.util.Date
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
-    if (catalog) CatalogDialog(
-        settings.subscriptions,
-        onDismiss = { catalog = false },
-        onPick = { entry -> onAdd(DefaultSubscriptionsRegistry.toSubscription(entry)) }
-    )
 }
 
 @Composable private fun ModeTabs(value: SubscriptionMode?, onPick: (SubscriptionMode?) -> Unit) {
@@ -178,42 +171,6 @@ import java.util.Date
     }
 }
 
-/** Каталог бесплатных подписок: слоты ЧС и БС с готовой привязкой к режиму. */
-@Composable private fun CatalogDialog(existing: List<Subscription>, onDismiss: () -> Unit, onPick: (CatalogEntry) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Каталог подписок") }, text = {
-        LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                Text(
-                    "Публичные пулы сообщества. Доступность и скорость зависят от сети — проверяйте узлы перед подключением.",
-                    style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted
-                )
-            }
-            items(DefaultSubscriptionsRegistry.entries, key = { it.id }) { entry ->
-                val added = existing.any { it.url == entry.url }
-                Surface(
-                    shape = Palette.CardShape, color = Palette.CardFill,
-                    border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(entry.title, style = MaterialTheme.typography.titleSmall)
-                        Text(entry.note, style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (entry.mode == SubscriptionMode.WHITELIST) "БС · 24 ч" else "ЧС · 6 ч",
-                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
-                                color = if (entry.mode == SubscriptionMode.WHITELIST) Palette.Emerald else Palette.Cyan
-                            )
-                            Spacer(Modifier.weight(1f))
-                            TextButton(onClick = { onPick(entry) }, enabled = !added) {
-                                Text(if (added) "Добавлено" else "Добавить")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }, confirmButton = { TextButton(onDismiss) { Text("Закрыть") } })
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun SubscriptionCard(

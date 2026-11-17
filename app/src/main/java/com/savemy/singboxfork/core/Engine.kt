@@ -71,16 +71,22 @@ class Engine(private val context:Context,private val repo:Repository,private val
             val data=repo.state.value
             val nodes=pick(data)
             if(nodes.isEmpty()) return@withLock emptyList()
-            if(temporary) { runtime.stop();runtime.start(data,null) }
-            else if(runtime.stale(data)) {
-                // Горячая перезагрузка сохраняет службу; новый TUN учитывает изменённые исключения.
-                runtime.reload(data)
-                val current=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
-                mutable.value=mutable.value.copy(activeId=current?.id)
-            }
-            val result=measure(nodes,attempts=1,report=true)
+            // Ядро может отказаться от конфигурации (один битый узел, повтор тега, несовместимое поле).
+            // Раньше это роняло проверку целиком с советом «проверьте JSON»; теперь остаётся
+            // TCP-этап, а точная причина попадает в интерфейс и журнал.
+            val coreError=try { startCore(data,temporary);null }
+                catch(e:CancellationException) { throw e }
+                catch(e:Exception) {
+                    journal.add("Ядро не приняло конфигурацию (${e.javaClass.simpleName})")
+                    if(!temporary) failConnection("Не удалось перезагрузить конфигурацию. VPN остановлен.")
+                    Diagnostics.describe(e)
+                }
+            val result=measure(nodes,attempts=1,report=true,tcpOnly=coreError!=null)
             repo.results(result)
-            if(check.value?.fallback==true) {
+            if(coreError!=null) {
+                journal.add("Проверка только по TCP: ядро отклонило конфигурацию")
+                mutable.value=mutable.value.copy(notice="Ядро не приняло конфигурацию: $coreError. Узлы проверены только по TCP — уберите проблемный узел или обновите подписку.")
+            } else if(check.value?.fallback==true) {
                 journal.add("TCP-этап не пропустил ни одного узла: все проверены через URLTest")
                 mutable.value=mutable.value.copy(notice="TCP-проверка не прошла ни для одного узла — возможен перехват DNS. Все узлы проверены через URLTest.")
             }
@@ -88,16 +94,26 @@ class Engine(private val context:Context,private val repo:Repository,private val
             result.filter { it.latencyMs!=null }.sortedBy { it.latencyMs }
         } catch(e:CancellationException) { throw e }
         catch(e:Exception) {
-            if(!temporary) failConnection("Не удалось перезагрузить конфигурацию. VPN остановлен.")
-            journal.add("Ошибка диагностики (${e.javaClass.simpleName})");throw IllegalStateException("Не удалось проверить узлы. Проверьте подключение к сети и JSON конфигурации.")
+            journal.add("Ошибка проверки (${e.javaClass.simpleName})")
+            throw IllegalStateException("Не удалось проверить узлы: ${Diagnostics.describe(e)}")
         }
         finally { scanJob=null;checking.value=false;check.value=null;if(temporary) runtime.stop() }
     } }
+    /** Поднимает ядро для проверки: временное (без TUN) или горячая перезагрузка конфигурации. */
+    private fun startCore(data:AppData,temporary:Boolean) {
+        if(temporary) { runtime.stop();runtime.start(data,null);return }
+        if(!runtime.stale(data)) return
+        // Горячая перезагрузка сохраняет службу; новый TUN учитывает изменённые исключения.
+        runtime.reload(data)
+        val current=candidates(data).firstOrNull { it.id==data.settings.selectedId } ?: candidates(data).firstOrNull()
+        mutable.value=mutable.value.copy(activeId=current?.id)
+    }
     /** Двухэтапная проверка; прогресс и пакеты результатов уходят в UI только при report=true. */
-    private suspend fun measure(nodes:List<Node>,attempts:Int,report:Boolean=false):List<Node> =
+    private suspend fun measure(nodes:List<Node>,attempts:Int,report:Boolean=false,tcpOnly:Boolean=false):List<Node> =
         runner.run(nodes,runtime.proxy,attempts,checkMode=repo.state.value.settings.checkMode,
             onProgress={ if(report) check.value=it },
-            onBatch={ batch -> if(report) results.value=results.value+batch.associateBy { it.id } })
+            onBatch={ batch -> if(report) results.value=results.value+batch.associateBy { it.id } },
+            tcpOnly=tcpOnly)
     private suspend fun healthCheck() { lock.withLock {
         if(mutable.value.phase!=Phase.CONNECTED || !repo.state.value.settings.smartRouting) return@withLock
         try {

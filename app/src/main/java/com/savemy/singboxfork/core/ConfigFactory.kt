@@ -37,16 +37,23 @@ object ConfigFactory {
             extraProxyApps = s.proxyApps
         )
         require(spec.effectiveMtu in 1280..8500)
-        val candidates = data.candidates(s.routingMode)
-        if (spec.vpn) require(candidates.isNotEmpty()) { "Нет доступных для подключения узлов. Смените фильтр или уберите BL." }
-        val selected = candidates.firstOrNull { it.id == s.selectedId } ?: candidates.firstOrNull()
-        val outbounds = data.nodes.map { node ->
-            val obj = codec.parseToJsonElement(node.outbound).jsonObject.toMutableMap()
+        // id узла становится тегом outbound. Повтор тега или битый JSON одного узла
+        // раньше ронял запуск ядра целиком (и проверка узлов падала без объяснения),
+        // поэтому такие узлы отбрасываются поштучно.
+        val tags = HashSet<String>(data.nodes.size * 2)
+        val outbounds = data.nodes.mapNotNull { node ->
+            if (!tags.add(node.id)) return@mapNotNull null
+            val obj = runCatching { codec.parseToJsonElement(node.outbound).jsonObject.toMutableMap() }.getOrNull()
+                ?: return@mapNotNull null
             obj["tag"] = JsonPrimitive(node.id)
             // Для TUIC режим stream передаёт UDP надёжным потоком QUIC, ценой задержек.
             if (node.protocol == "tuic" && s.packetRecovery) { obj["udp_relay_mode"] = JsonPrimitive("quic"); obj.remove("udp_over_stream") }
             JsonObject(obj)
-        } + listOf(buildJsonObject { put("type", "direct"); put("tag", "direct") }, buildJsonObject {
+        }
+        val candidates = data.candidates(s.routingMode).filter { it.id in tags }
+        if (spec.vpn) require(candidates.isNotEmpty()) { "Нет доступных для подключения узлов. Смените фильтр или уберите BL." }
+        val selected = candidates.firstOrNull { it.id == s.selectedId } ?: candidates.firstOrNull()
+        val outboundsFinal = outbounds + listOf(buildJsonObject { put("type", "direct"); put("tag", "direct") }, buildJsonObject {
             put("type", "selector"); put("tag", "proxy")
             put("outbounds", JsonArray((candidates.map { it.id }.ifEmpty { listOf("direct") }).map(::JsonPrimitive)))
             put("default", selected?.id ?: "direct"); put("interrupt_exist_connections", true)
@@ -69,7 +76,7 @@ object ConfigFactory {
                     put("exclude_package", JsonArray(excluded.map(::JsonPrimitive)))
                 })
             })
-            put("outbounds", JsonArray(outbounds))
+            put("outbounds", JsonArray(outboundsFinal))
             put("route", buildJsonObject {
                 put("auto_detect_interface", true); put("default_domain_resolver", "bootstrap"); put("final", routing.finalOutbound)
                 if (ruleSets.isNotEmpty()) put("rule_set", buildJsonArray {

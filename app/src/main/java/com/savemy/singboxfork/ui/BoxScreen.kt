@@ -140,9 +140,10 @@ import java.util.Date
                             val next = app.repository.state.value.settings
                             if (old.intervalMinutes != next.intervalMinutes) com.savemy.singboxfork.work.RefreshWorker.schedule(app, next.intervalMinutes)
                             if (next.subscriptions.isNotEmpty()) SubscriptionWorker.sync(context, next.subscriptions) else SubscriptionWorker.cancelAll(context)
-                            if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes) != next) app.engine.applySettings()
+                            // Канал обновлений и расписания не трогают туннель: перезагрузка нужна только сетевым настройкам.
+                            if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes, updateChannel = next.updateChannel) != next) app.engine.applySettings()
                         }
-                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" }, openSubscriptions = { page = "Подписки" }, openLogs = { page = "Журнал" }, context = context)
+                    }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" }, openSubscriptions = { page = "Подписки" }, openLogs = { page = "Журнал" }, updater = app.updater, context = context)
                 }
             }
         }

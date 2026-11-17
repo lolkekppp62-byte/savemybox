@@ -56,7 +56,9 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val subIntervalMinutes: Long = 360,
     val routing: RoutingProfile = RoutingProfile(),
     val advancedMode: Boolean = false,
-    val advancedJson: String = ""
+    val advancedJson: String = "",
+    /** Канал обновлений: стабильные выпуски или бета 0.0.*. */
+    val updateChannel: UpdateChannel = UpdateChannel.STABLE
 )
 @Serializable data class AppData(val nodes: List<Node> = emptyList(), val settings: Settings = Settings())
 fun AppData.filtered(): List<Node> = nodes.filter { settings.filter == NodeFilter.ALL || it.mark.name == settings.filter.name }

@@ -84,7 +84,9 @@ class NodeChecker(
         targets: List<ProbeTarget>,
         attempts: Int = 1,
         onProgress: (CheckProgress) -> Unit = {},
-        onBatch: suspend (List<NodeResult>) -> Unit = {}
+        onBatch: suspend (List<NodeResult>) -> Unit = {},
+        /** Без ядра (ядро не приняло конфигурацию) результат даёт только TCP-этап. */
+        tcpOnly: Boolean = false
     ): List<NodeResult> = coroutineScope {
         require(attempts >= 1) { "Нужна хотя бы одна проба" }
         val total = targets.size
@@ -139,6 +141,22 @@ class NodeChecker(
                     }
                 }
             }.awaitAll()
+
+            if (tcpOnly) {
+                // Задержка берётся из TCP-соединения: это доступность сервера, а не проверка протокола.
+                targets.forEach { target ->
+                    if (results.containsKey(target.id)) return@forEach
+                    val ms = tcpMs[target.id]
+                    val result = if (ms != null) NodeResult(target.id, ms, ms, null, CheckStatus.ALIVE, clock())
+                        else NodeResult(target.id, null, null, null, CheckStatus.TCP_FAILED, clock())
+                    results[target.id] = result
+                    if (ms != null) alive.incrementAndGet()
+                    bufferLock.withLock { buffer += result }
+                }
+                finished.set(targets.size)
+                onProgress(CheckProgress(TestStage.DONE, targets.size, total, alive.get(), true))
+                return@coroutineScope targets.mapNotNull { results[it.id] }
+            }
 
             // Ни один TCP-коннект не прошёл: причина может быть в DNS/фильтрации, а не в узлах.
             fallback = tcpTargets.isNotEmpty() && tcpMs.isEmpty()

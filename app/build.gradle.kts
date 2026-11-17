@@ -11,8 +11,8 @@ android {
         applicationId = "com.savemy.singboxfork"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // В APK только arm64-v8a: полный набор ABI весит ~350 МБ и часто качается
         // на телефон неполностью, а установщик затем пишет о проблеме с файлом.

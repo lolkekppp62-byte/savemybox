@@ -58,7 +58,15 @@ class Repository(context: Context) {
     suspend fun updateSettings(transform: (Settings) -> Settings) = change { it.copy(settings = transform(it.settings)) }
     suspend fun add(nodes: List<Node>) = change { d ->
         // Пул ограничен: список и проверка не должны разрастаться бесконечно.
-        d.copy(nodes = SubscriptionManager.capPool(d.nodes + nodes))
+        // id — тег outbound у ядра, поэтому повторы не допускаются и здесь.
+        val used = d.nodes.mapTo(HashSet(d.nodes.size * 2)) { it.id }
+        val fresh = nodes.map { node ->
+            var id = node.id
+            var index = 1
+            while (!used.add(id)) { index++; id = "${node.id}#$index" }
+            node.copy(id = id)
+        }
+        d.copy(nodes = SubscriptionManager.capPool(d.nodes + fresh))
     }
     suspend fun mark(id: String, mark: Mark) = change { d -> d.copy(nodes = d.nodes.map { if(it.id == id) it.copy(mark=mark) else it }) }
     suspend fun remove(id: String) = change { it.copy(nodes = it.nodes.filterNot { n -> n.id == id }) }
@@ -78,8 +86,8 @@ class Repository(context: Context) {
     }
     /** Обновляет список узлов подписки: удаляет старые узлы этой подписки, добавляет свежие. */
     suspend fun addFromSubscription(subId: String, fresh: List<Node>) = change { d ->
-        // Дедупликация по адрес+порт+протокол и лимит на подписку.
-        val tagged = SubscriptionManager.distinct(fresh).map { it.copy(id = "$subId::${it.name.take(80)}") }
+        // Дедупликация по адрес+порт+протокол, лимит на подписку и уникальные id (теги ядра).
+        val tagged = subscriptionNodes(subId, SubscriptionManager.distinct(fresh))
         val existing = d.nodes.filterNot { it.id.startsWith("$subId::") }
         d.copy(nodes = SubscriptionManager.capPool(existing + tagged))
     }

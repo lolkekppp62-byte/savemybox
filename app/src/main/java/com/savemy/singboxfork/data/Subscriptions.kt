@@ -112,68 +112,18 @@ fun AppData.preferredForMode(mode: RoutingMode): Node? {
 fun AppData.nodesOf(sub: Subscription): List<Node> = nodes.filter { it.id.startsWith("${sub.id}::") }
 
 /**
- * Встроенный каталог бесплатных подписок. Слоты ЧС рассчитаны на заблокированные сервисы,
- * слоты БС — на локальные/РФ-узлы при полном туннеле. Каталог инициализируется один раз.
+ * Уникальные id узлов подписки. Публичные списки часто повторяют имена узлов
+ * («🇩🇪 DE», «vless-1» и т. п.), а id становится тегом outbound в конфиге ядра:
+ * два одинаковых тега — и ядро отказывается стартовать, роняя проверку целиком.
+ * Поэтому повторы получают числовой суффикс.
  */
-data class CatalogEntry(
-    val id: String,
-    val title: String,
-    val note: String,
-    val url: String,
-    val mode: SubscriptionMode,
-    val refresh: SubscriptionRefresh
-)
-
-object DefaultSubscriptionsRegistry {
-    const val BLACKLIST_ID = "catalog-blacklist"
-    const val WHITELIST_ID = "catalog-whitelist"
-
-    val entries: List<CatalogEntry> = listOf(
-        CatalogEntry(
-            id = "$BLACKLIST_ID-v2ray-configs",
-            title = "V2ray-Configs · общий пул",
-            note = "Публичный GitHub-список VLESS/Reality/Trojan для заблокированных сервисов",
-            url = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/All_Configs_Sub.txt",
-            mode = SubscriptionMode.BLACKLIST, refresh = SubscriptionRefresh.H6
-        ),
-        CatalogEntry(
-            id = "$BLACKLIST_ID-aggregator",
-            title = "V2RayAggregator · merge",
-            note = "Объединённый Base64-список с обновлением каждые 6 часов",
-            url = "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
-            mode = SubscriptionMode.BLACKLIST, refresh = SubscriptionRefresh.H6
-        ),
-        CatalogEntry(
-            id = "$BLACKLIST_ID-collector",
-            title = "Telegram-collector · mixed",
-            note = "Смешанный пул VLESS/Trojan/Hysteria2 для YouTube, Discord и AI",
-            url = "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/mixed",
-            mode = SubscriptionMode.BLACKLIST, refresh = SubscriptionRefresh.H6
-        ),
-        CatalogEntry(
-            id = "$WHITELIST_ID-reality",
-            title = "Reality-пул · локальные узлы",
-            note = "VLESS-Reality для БС: проверяйте пинг, локация узлов не гарантируется",
-            url = "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
-            mode = SubscriptionMode.WHITELIST, refresh = SubscriptionRefresh.H24
-        ),
-        CatalogEntry(
-            id = "$WHITELIST_ID-vless",
-            title = "VLESS-пул · БС",
-            note = "Резервный VLESS-список для белого списка, обновление раз в сутки",
-            url = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
-            mode = SubscriptionMode.WHITELIST, refresh = SubscriptionRefresh.H24
-        )
-    )
-
-    fun byMode(mode: SubscriptionMode): List<CatalogEntry> = entries.filter { it.mode == mode }
-
-    fun toSubscription(entry: CatalogEntry): Subscription = Subscription(
-        name = entry.title, url = entry.url, mode = entry.mode,
-        refresh = entry.refresh, source = "catalog"
-    )
-
-    /** Первый запуск: каталог подставляется только если пользователь ещё ничего не добавлял. */
-    fun seed(existing: List<Subscription>): List<Subscription> =
-        if (existing.isEmpty()) entries.map(::toSubscription) else existing
+fun subscriptionNodes(subId: String, nodes: List<Node>): List<Node> {
+    val used = HashSet<String>(nodes.size * 2)
+    return nodes.map { node ->
+        val base = "$subId::${node.name.take(64)}"
+        var id = base
+        var index = 1
+        while (!used.add(id)) { index++; id = "$base#$index" }
+        node.copy(id = id)
+    }
 }

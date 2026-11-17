@@ -12,13 +12,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.savemy.singboxfork.BuildConfig
+import com.savemy.singboxfork.core.UpdateState
+import com.savemy.singboxfork.core.Updater
 import com.savemy.singboxfork.data.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,context: Context) {
+@Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,updater:Updater,context: Context) {
     val s=data.settings
+    val update by updater.state.collectAsStateWithLifecycle()
     var custom by remember { mutableStateOf("") };var unit by remember { mutableStateOf("minutes") };var error by remember { mutableStateOf<String?>(null) }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         item { Text("Настройки",style=MaterialTheme.typography.headlineLarge);Text("Внешний вид меняется сразу. Сетевые настройки переподключают туннель.") }
@@ -111,6 +116,42 @@ import kotlinx.coroutines.withContext
             Button({runCatching { Interval.parse(custom,unit) }.onSuccess { n -> change { it.copy(intervalMinutes=n) };error=null }.onFailure { error=it.message }}) { Text("Сохранить интервал") }
             error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
             Text("От 15 минут до 30 дней. Android может отложить проверку в режиме сна. Расписание проверяет доступность, а не обновляет подписки.",style=MaterialTheme.typography.bodySmall)
+        } }
+        item { Section("Обновления") {
+            Text("Установлено: ${BuildConfig.VERSION_NAME} (сборка ${BuildConfig.VERSION_CODE})")
+            Text("Канал обновлений")
+            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                listOf(UpdateChannel.STABLE to "Стабильные",UpdateChannel.BETA to "Бета · 0.0.*").forEach { (channel,label) ->
+                    FilterChip(s.updateChannel==channel,{change { it.copy(updateChannel=channel) }},label={Text(label)})
+                }
+            }
+            Text(
+                if(s.updateChannel==UpdateChannel.BETA) "Бета получает только версии 0.0.* — они могут быть нестабильными"
+                else "Стабильный канал: выпуски без пометки «бета»",
+                style=MaterialTheme.typography.bodySmall)
+            when (val st = update) {
+                is UpdateState.Checking -> Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp);Text("Проверяем…",style=MaterialTheme.typography.bodySmall)
+                }
+                is UpdateState.UpToDate -> Text("Установлена последняя версия: ${st.current}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)
+                is UpdateState.Available -> {
+                    Text("Доступна версия ${st.release.version}",style=MaterialTheme.typography.titleSmall)
+                    if(st.release.notes.isNotBlank()) Text(st.release.notes.take(280),style=MaterialTheme.typography.bodySmall)
+                    Button({ updater.install(st.release) },Modifier.fillMaxWidth()) { Text("Обновить до ${st.release.version}") }
+                }
+                is UpdateState.Downloading -> {
+                    LinearProgressIndicator(progress={ st.percent/100f },modifier=Modifier.fillMaxWidth())
+                    Text("Скачиваем APK: ${st.percent}%",style=MaterialTheme.typography.bodySmall)
+                }
+                is UpdateState.Ready -> {
+                    Text("APK ${st.release.version} скачан — откройте установщик, Android спросит подтверждение.",style=MaterialTheme.typography.bodySmall)
+                    Button({ updater.install(st.release) },Modifier.fillMaxWidth()) { Text("Открыть установщик") }
+                }
+                is UpdateState.Failed -> Text(st.message,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+                UpdateState.Idle -> Unit
+            }
+            OutlinedButton({ updater.check(s.updateChannel) },Modifier.fillMaxWidth(),enabled = update !is UpdateState.Checking && update !is UpdateState.Downloading) { Text("Проверить обновление") }
+            Text("Обновление качается прямо в приложение. Адрес выпусков — GitHub Releases проекта.",style=MaterialTheme.typography.bodySmall)
         } }
         item { OutlinedButton(openLogs,Modifier.fillMaxWidth()) { Text("Журнал соединений и проверок") };Text("Савеми Бокс · sing-box 1.14.4",style=MaterialTheme.typography.labelMedium) }
     }

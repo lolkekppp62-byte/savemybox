@@ -33,7 +33,8 @@ class NodeCheckRunner(
         attempts: Int = 1,
         checkMode: CheckMode = mode,
         onProgress: (CheckProgress) -> Unit = {},
-        onBatch: suspend (List<NodeResult>) -> Unit = {}
+        onBatch: suspend (List<NodeResult>) -> Unit = {},
+        tcpOnly: Boolean = false
     ): List<Node> {
         val targets = nodes.mapNotNull(::target)
         if (targets.isEmpty()) return emptyList()
@@ -44,7 +45,7 @@ class NodeCheckRunner(
             tcpTimeoutMs = checkMode.tcpTimeoutMs,
             urlTimeoutMs = checkMode.urlTimeoutMs
         )
-        val results = checker.run(targets, attempts, onProgress, onBatch)
+        val results = checker.run(targets, attempts, onProgress, onBatch, tcpOnly)
         val byId = results.associateBy { it.id }
         return nodes.mapNotNull { node ->
             byId[node.id]?.let { r ->
