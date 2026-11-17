@@ -12,7 +12,10 @@
 - `data/NodeParser.kt`, `data/Importer.kt` — контракт разбора и реализация: per-protocol разбор ссылок (vless/trojan/shadowsocks/hysteria2/tuic/vmess), самостоятельный outbound JSON, закэшированный тип протокола в узле.
 - `data/Repository.kt` — атомарное сохранение AES-GCM с Android Keystore, StateFlow. Резервное копирование приложением отключено. При повреждении файла запись блокируется, исходный файл не затирается.
 - `core/ConfigFactory.kt` — генератор из `CoreSpec`: DNS, TUN, прокси, selector, исключения пакетов, MTU, TUIC, профиль маршрутизации (домены/пакеты direct/block), локальные rule-set `.srs` и продвинутый JSON поверх базы.
-- `core/Engine.kt` — жизненный цикл CommandServer, проверки узлов и переключение.
+- `core/Engine.kt` — фасад ядра: состояние соединения, блокировка операций, Smart Routing.
+- `core/CoreRuntime.kt` — жизненный цикл libbox: CommandServer, случайный порт и секрет, локальный API, перезагрузка конфигурации.
+- `core/NodeCheck.kt`, `core/NodeCheckRunner.kt` — двухэтапная проверка и перенос результатов в узлы.
+- `core/SmartRouter.kt` — чистое решение о переключении на резервный узел.
 - `core/AndroidPlatform.kt` — платформенный API libbox: защита сокетов, интерфейсы, монитор лучшей физической сети, определение владельца соединения на Android 10+.
 - `core/LocalApi.kt` — запросы к локальному Clash API, случайный секрет, только loopback. Закрытие ожидающих сокетов при отключении.
 - `vpn/BoxVpnService.kt` — Android VpnService, TUN, foreground-уведомление и системное разрешение VPN.
@@ -108,8 +111,8 @@ build.cmd --install
 
 ## Выполненные и невыполненные проверки
 
-- `python tools/test_core.py`: **OK (39 tests)**; настоящая компиляция Kotlin/JVM для импорта, моделей, двухэтапной проверки узлов, маршрутизации, генератора конфигурации и локального API. Тесты HTTP используют реальный loopback-сокет, не VPN.
-- Тот же сценарий: **Kotlin syntax: OK (25 files)**. Парсер Kotlin проверяет все исходники app/src; это не проверка Android/Compose типов и JNI.
+- `python tools/test_core.py`: **OK (47 tests)**; настоящая компиляция Kotlin/JVM для импорта, моделей, двухэтапной проверки узлов, Smart Routing, маршрутизации, генератора конфигурации и локального API. Тесты HTTP используют реальный loopback-сокет, не VPN.
+- Тот же сценарий: **Kotlin syntax: OK (30 files)**. Парсер Kotlin проверяет все исходники app/src; это не проверка Android/Compose типов и JNI.
 - `python -m py_compile tools/build.py tools/test_core.py`: прошёл.
 - Проверка окружения остановлена на Java 8 вместо JDK 17. **assembleDebug, Android lint, libbox AAR, установка APK и проверка VPN не выполнены.**
 - Два исследователя проверили API ядра и исходники приложения. Полноценный автоматический проверяющий агент в среде недоступен. Найденные проблемы остановки/перезапуска исправлены; гипотеза о лишней скобке опровергнута текущим Kotlin-парсером.
