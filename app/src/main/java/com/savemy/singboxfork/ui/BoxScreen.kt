@@ -159,7 +159,7 @@ import java.util.Date
                                 onDelete = { node -> action { app.repository.remove(node.id); app.engine.applySettings() } },
                                 onEdit = { node, name, source, mark, folder -> action { app.repository.editNode(node.id, name, source, mark, folder); app.engine.applySettings() } },
                                 onFolder = { name -> action { app.repository.addFolder(name) } },
-                                onCombine = { ids, name -> action { app.repository.combine(ids, name) } })
+                                onCombine = { links, name, mark -> action { app.repository.combine(links, name, mark); app.engine.applySettings() } })
                         })
                     else SettingsScreen(data, change = { transform ->
                         action {

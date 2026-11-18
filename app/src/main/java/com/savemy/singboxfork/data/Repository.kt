@@ -93,12 +93,25 @@ class Repository(context: Context) {
         require(name.trim().isNotEmpty() && name.length <= 120) { "Введите название папки (до 120 символов)" }
         d.copy(folders = d.folders + NodeFolder(name = name.trim()))
     }
-    /** Совмещение — группа для проверки и выбора, не цепочка и не сложение скоростей. */
-    suspend fun combine(ids: Set<String>, name: String) = change { d ->
-        require(ids.size in 2..25 && d.nodes.count { it.id in ids } == ids.size) { "Выберите от 2 до 25 существующих узлов" }
-        require(name.trim().isNotEmpty() && name.length <= 120) { "Введите название группы" }
+    /**
+     * «Совместить»: до 25 ссылок за раз в отдельную папку — узлы не нужно добавлять по одному.
+     * Это группировка для выбора и проверки, а не цепочка прокси и не сложение скоростей.
+     */
+    suspend fun combine(links: String, name: String, mark: Mark = Mark.NONE) = change { d ->
+        require(name.trim().isNotEmpty() && name.length <= 120) { "Введите название группы (до 120 символов)" }
+        val rows = links.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        require(rows.size in 1..25) { "Вставьте от 1 до 25 ссылок, каждая с новой строки" }
+        val parsed = Importer.parse(rows.joinToString("\n"), mark)
+        require(parsed.isNotEmpty()) { "В ссылках не найдено ни одного узла" }
         val folder = NodeFolder(name = name.trim())
-        d.copy(folders = d.folders + folder, nodes = d.nodes.map { if (it.id in ids) it.copy(folderId = folder.id) else it })
+        val used = d.nodes.mapTo(HashSet()) { it.id }
+        val fresh = parsed.map { node ->
+            var id = node.id
+            var index = 1
+            while (!used.add(id)) { index++; id = "${node.id}#$index" }
+            node.copy(id = id, folderId = folder.id)
+        }
+        d.copy(folders = d.folders + folder, nodes = SubscriptionManager.capPool(d.nodes + fresh))
     }
     suspend fun mark(id: String, mark: Mark) = change { d -> d.copy(nodes = d.nodes.map { if(it.id == id) it.copy(mark=mark) else it }) }
     suspend fun remove(id: String) = change { it.copy(nodes = it.nodes.filterNot { n -> n.id == id }) }
