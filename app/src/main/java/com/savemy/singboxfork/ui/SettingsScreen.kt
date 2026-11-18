@@ -42,6 +42,10 @@ import kotlinx.coroutines.withContext
         item { Section("Безопасность") {
             Button(onClick=onConnectVpn,Modifier.fillMaxWidth()) { Text("Подключить VPN сейчас") }
             Text("Сразу запросит разрешение VPN и подключится к выбранному узлу.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick={
+                runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }, modifier=Modifier.fillMaxWidth()) { Text("VPN в настройках телефона") }
+            Text("После первого разрешения приложение появляется в системном списке VPN: там туннель включается переключателем телефона и настраивается «Всегда включённая VPN».",style=MaterialTheme.typography.bodySmall)
             Toggle("Kill Switch (блокировать трафик без VPN)",s.killSwitch) { value -> change { it.copy(killSwitch=value) } }
             Text("Если туннель упадёт, весь трафик будет заблокирован до восстановления VPN.",style=MaterialTheme.typography.bodySmall)
             Toggle("Запускать VPN при загрузке устройства",s.startOnBoot) { value -> change { it.copy(startOnBoot=value) } }
@@ -130,7 +134,7 @@ import kotlinx.coroutines.withContext
                 }
             }
             Text(
-                if(s.updateChannel==UpdateChannel.BETA) "Предварительный канал получает в том числе 0.3.1. Сборки могут быть нестабильными."
+                if(s.updateChannel==UpdateChannel.BETA) "Предварительный канал получает и предварительные сборки. Они могут быть нестабильными."
                 else "Стабильный канал: выпуски без пометки «бета»",
                 style=MaterialTheme.typography.bodySmall)
             when (val st = update) {
@@ -141,21 +145,13 @@ import kotlinx.coroutines.withContext
                 is UpdateState.Available -> {
                     Text("Доступна версия ${st.release.version}",style=MaterialTheme.typography.titleSmall)
                     if(st.release.notes.isNotBlank()) Text(st.release.notes.take(280),style=MaterialTheme.typography.bodySmall)
-                    Button({ updater.install(st.release) },Modifier.fillMaxWidth()) { Text("Обновить до ${st.release.version}") }
-                }
-                is UpdateState.Downloading -> {
-                    LinearProgressIndicator(progress={ st.percent/100f },modifier=Modifier.fillMaxWidth())
-                    Text("Скачиваем APK: ${st.percent}%",style=MaterialTheme.typography.bodySmall)
-                }
-                is UpdateState.Ready -> {
-                    Text("APK ${st.release.version} скачан — откройте установщик, Android спросит подтверждение.",style=MaterialTheme.typography.bodySmall)
-                    Button({ updater.install(st.release) },Modifier.fillMaxWidth()) { Text("Открыть установщик") }
+                    Button({ updater.open(st.release) },Modifier.fillMaxWidth()) { Text("Скачать ${st.release.version} в браузере") }
                 }
                 is UpdateState.Failed -> Text(st.message,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
                 UpdateState.Idle -> Unit
             }
-            OutlinedButton({ updater.check(s.updateChannel) },Modifier.fillMaxWidth(),enabled = update !is UpdateState.Checking && update !is UpdateState.Downloading) { Text("Проверить обновление") }
-            Text("Обновление качается прямо в приложение. Адрес выпусков — GitHub Releases проекта.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton({ updater.check(s.updateChannel) },Modifier.fillMaxWidth(),enabled = update !is UpdateState.Checking) { Text("Проверить обновление") }
+            Text("Откроется страница выпуска на GitHub: APK скачает и установит браузер. Приложению больше не нужно право устанавливать пакеты — именно оно и вызывало предупреждение Play Protect.",style=MaterialTheme.typography.bodySmall)
         } }
         item { OutlinedButton(openLogs,Modifier.fillMaxWidth()) { Text("Журнал соединений и проверок") };Text("Савеми Бокс · sing-box 1.14.4",style=MaterialTheme.typography.labelMedium) }
     }

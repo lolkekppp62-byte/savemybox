@@ -32,7 +32,9 @@ class BoxVpnService : VpnService() {
         if(intent?.action=="stop") { scope.launch { app.engine.disconnect(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }; return START_NOT_STICKY }
         try {
             check(prepare(this) == null) { "Разрешение VPN не получено" }
-            if(Build.VERSION.SDK_INT>=34) startForeground(1,notification("Подключение…"),ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+            // specialUse — единственный тип, который обычное (не системное) приложение
+            // вправе запускать до того, как оно появилось в системных настройках VPN.
+            if(Build.VERSION.SDK_INT>=34) startForeground(1,notification("Подключение…"),ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             else startForeground(1,notification("Подключение…"))
         } catch (e: Exception) {
             app.engine.message("Android не разрешил запуск VPN: ${com.savemy.singboxfork.core.Diagnostics.describe(e)}")
