@@ -21,11 +21,12 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
         if (app.repository.loadError.value != null) return Result.failure()
         val settings = app.repository.state.value.settings
         val target = inputData.getString(KEY_SUB)
+        val source = inputData.getString(KEY_SOURCE)
         val subs = settings.subscriptions.filter { it.enabled && (target == null || it.id == target) }
             .filter { it.sources().isNotEmpty() }
         if (subs.isEmpty()) return Result.success()
         return try {
-            subs.forEach { sub -> refresh(app, sub) }
+            subs.forEach { sub -> refresh(app, sub, source) }
             Result.success()
         } catch (e: CancellationException) {
             throw e
@@ -34,10 +35,12 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
         }
     }
 
-    private suspend fun refresh(app: BoxApp, sub: Subscription) {
-        val urls = sub.sources()
+    private suspend fun refresh(app: BoxApp, sub: Subscription, source: String?) {
+        require(source == null || source in sub.sources()) { "Ссылка отсутствует в боксе" }
+        val urls = if (source == null) sub.sources() else listOf(source)
         var fetched = 0
         val merged = ArrayList<Node>()
+        val successful = ArrayList<Pair<String, List<Node>>>()
         var lastError: Exception? = null
         for (url in urls) {
             try {
@@ -50,7 +53,10 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
                     }
                 }
                 // Base64, .txt-список, JSON и набор URI-ссылок разбирает один импортёр.
-                merged += SubscriptionManager.parse(raw, Mark.NONE)
+                val parsed = SubscriptionManager.parse(raw, Mark.NONE).map { it.copy(sourceUrl = url) }
+                require(parsed.isNotEmpty()) { "В ссылке нет узлов; старый список сохранён" }
+                successful += url to parsed
+                merged += parsed
                 fetched++
             } catch (e: CancellationException) {
                 throw e
@@ -59,7 +65,8 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
             }
         }
         if (fetched == 0 && urls.isNotEmpty()) throw (lastError ?: IllegalStateException("Не удалось обновить бокс"))
-        if (merged.isNotEmpty()) app.repository.addFromSubscription(sub.id, merged)
+        if (source == null && fetched == urls.size) app.repository.addFromSubscription(sub.id, merged)
+        else successful.forEach { (url, nodes) -> app.repository.addFromSubscription(sub.id, nodes, url) }
         app.repository.updateSettings { s ->
             s.copy(subscriptions = s.subscriptions.map { if (it.id == sub.id) it.copy(lastUpdated = System.currentTimeMillis()) else it })
         }
@@ -67,6 +74,7 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
 
     companion object {
         const val KEY_SUB = "subId"
+        const val KEY_SOURCE = "sourceUrl"
         private const val TAG = "subscription-refresh"
         private fun workName(id: String) = "sub-refresh-$id"
 
@@ -100,13 +108,14 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
         }
 
         /** Немедленное обновление: разовая задача вместо ожидания расписания. */
-        fun refreshNow(context: Context, subId: String? = null) {
+        fun refreshNow(context: Context, subId: String? = null, sourceUrl: String? = null) {
+            require(sourceUrl == null || subId != null)
             val request = OneTimeWorkRequestBuilder<SubscriptionWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .apply { subId?.let { setInputData(workDataOf(KEY_SUB to it)) } }
+                .apply { if (subId != null) setInputData(workDataOf(KEY_SUB to subId, KEY_SOURCE to sourceUrl)) }
                 .addTag(TAG)
                 .build()
-            val name = subId?.let(::workName)?.plus("-now") ?: "sub-refresh-now"
+            val name = subId?.let(::workName)?.plus(if (sourceUrl == null) "-now" else "-source-${sourceUrl.hashCode()}") ?: "sub-refresh-now"
             WorkManager.getInstance(context).enqueueUniqueWork(name, ExistingWorkPolicy.REPLACE, request)
         }
 

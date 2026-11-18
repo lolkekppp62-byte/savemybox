@@ -135,6 +135,7 @@ import java.util.Date
                             SubscriptionWorker.cancel(context, id)
                         } },
                         onRefresh = { id -> action { SubscriptionWorker.refreshNow(context, id) } },
+                        onRefreshSource = { id, url -> action { SubscriptionWorker.refreshNow(context, id, url) } },
                         onRefreshAll = { action { SubscriptionWorker.refreshAllNow(context, data.settings.subscriptions) } },
                         onImport = { raw -> action {
                             val nodes = withContext(Dispatchers.Default) { Importer.parse(raw) }
@@ -159,7 +160,8 @@ import java.util.Date
                                 onDelete = { node -> action { app.repository.remove(node.id); app.engine.applySettings() } },
                                 onEdit = { node, name, source, mark, folder -> action { app.repository.editNode(node.id, name, source, mark, folder); app.engine.applySettings() } },
                                 onFolder = { name -> action { app.repository.addFolder(name) } },
-                                onCombine = { links, name, mark -> action { app.repository.combine(links, name, mark); app.engine.applySettings() } })
+                                onCombine = { links, name, mark -> action { app.repository.combine(links, name, mark); app.engine.applySettings() } },
+                                onRefreshAll = { refreshSubscriptions(context, app) })
                         })
                     else SettingsScreen(data, change = { transform ->
                         action {

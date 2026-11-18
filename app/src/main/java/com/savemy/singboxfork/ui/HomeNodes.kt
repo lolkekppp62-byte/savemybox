@@ -20,7 +20,9 @@ import com.savemy.singboxfork.data.*
                          onFolder: (String) -> Unit, onCombine: (String, String, Mark) -> Unit,
                          onEdit: (Node, String, String, Mark, String?) -> Unit,
                          onDelete: (Node) -> Unit, onSelect: (Node) -> Unit, onCheck: (String) -> Unit,
-                         onCheckGroup: (Set<String>) -> Unit) {
+                         onCheckGroup: (Set<String>) -> Unit,
+                         onRefreshAll: () -> Unit = {}) {
+    var addMenu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Node?>(null) }
     var deleting by remember { mutableStateOf<Node?>(null) }
     var folderDialog by remember { mutableStateOf(false) }
@@ -51,9 +53,12 @@ import com.savemy.singboxfork.data.*
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onAdd) { Text("Добавить узел") }
-            OutlinedButton({ folderName = ""; folderDialog = true }) { Text("Добавить папку") }
+        Box {
+            Button({ addMenu = true }) { Text("Добавить") }
+            DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                DropdownMenuItem(text = { Text("Узел") }, onClick = { addMenu = false; onAdd() })
+                DropdownMenuItem(text = { Text("Папку") }, onClick = { addMenu = false; folderName = ""; folderDialog = true })
+            }
         }
         TextButton({ combine = true; folderName = ""; links = ""; mark = Mark.NONE }) { Text("+ Совместить ссылки (до 25)") }
         if (data.nodes.isEmpty()) Text("Добавьте ссылку узла или подписку. Папки группируют узлы, не меняя их подключение.", style = MaterialTheme.typography.bodySmall)
@@ -71,9 +76,9 @@ import com.savemy.singboxfork.data.*
         }
         GroupHeader("Локальные узлы · ${local.size}", localOpen) { localOpen = !localOpen }
         if (localOpen) {
-            Row {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton({ onCheckGroup(local.map { it.id }.toSet()) }, enabled = !checking && local.isNotEmpty()) { Text("Проверить") }
-                TextButton({ folderName = ""; folderDialog = true }) { Text("Создать папку") }
+                TextButton(onClick = onRefreshAll, enabled = data.settings.subscriptions.any { it.enabled && it.sources().isNotEmpty() }) { Text("Обновить всё") }
             }
             local.forEach { key(it.id) { draw(it) } }
         }

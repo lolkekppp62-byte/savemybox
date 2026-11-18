@@ -41,6 +41,7 @@ import java.util.Date
     onUpdate: (Subscription) -> Unit,
     onRemove: (String) -> Unit,
     onRefresh: (String) -> Unit,
+    onRefreshSource: (String, String) -> Unit,
     onRefreshAll: () -> Unit,
     onImport: (String) -> Unit,
     onCheck: () -> Unit,
@@ -156,7 +157,7 @@ import java.util.Date
             )
         }
         items(shown, key = { it.id }) { sub ->
-            SubscriptionCard(sub, nodesOf(sub), onUpdate, onRemove, onRefresh, onCheckBox)
+            SubscriptionCard(sub, nodesOf(sub), onUpdate, onRemove, onRefresh, onRefreshSource, onCheckBox)
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
@@ -187,6 +188,7 @@ import java.util.Date
     onUpdate: (Subscription) -> Unit,
     onRemove: (String) -> Unit,
     onRefresh: (String) -> Unit,
+    onRefreshSource: (String, String) -> Unit,
     onCheckBox: (String) -> Unit
 ) {
     var extraLink by remember(sub.id) { mutableStateOf("") }
@@ -216,12 +218,12 @@ import java.util.Date
                     colors = SwitchDefaults.colors(checkedTrackColor = Palette.Cyan, checkedThumbColor = Palette.Ink)
                 )
             }
-            if (sources.isNotEmpty()) {
-                Text(
-                    sources.joinToString("\n") { it.take(64) },
-                    style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted,
-                    maxLines = 3, overflow = TextOverflow.Ellipsis
-                )
+            sources.forEach { url ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(url, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                        color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    TextButton({ onRefreshSource(sub.id, url) }) { Text("Обновить ссылку") }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(

@@ -86,6 +86,14 @@ class RoutingTest {
         }
     }
 
+    @Test fun bootstrapDnsDetoursThroughDirectOutbound() {
+        val cfg = config(RoutingProfile())
+        val bootstrap = cfg["dns"]!!.jsonObject["servers"]!!.jsonArray.first().jsonObject
+        assertEquals("bootstrap", bootstrap["tag"]!!.jsonPrimitive.content)
+        assertEquals("direct", bootstrap["detour"]!!.jsonPrimitive.content)
+        assertEquals("direct", cfg["outbounds"]!!.jsonArray.first { it.jsonObject["tag"]?.jsonPrimitive?.content == "direct" }.jsonObject["type"]!!.jsonPrimitive.content)
+    }
+
     @Test fun noRuleSetsWithoutDirectory() {
         val cfg = config(RoutingProfile(ruleSets = listOf(RuleSetFile(file = "ru.srs", tag = "ru"))), dir = null)
         assertNull(cfg["route"]!!.jsonObject["rule_set"])

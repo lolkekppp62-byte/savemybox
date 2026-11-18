@@ -130,11 +130,24 @@ class Repository(context: Context) {
         d.copy(nodes = d.nodes.map { old -> updates[old.id]?.let { old.copy(tcpMs=it.tcpMs,latencyMs=it.latencyMs,lossPercent=it.lossPercent,status=it.status,checkedAt=it.checkedAt) } ?: old })
     }
     /** Обновляет список узлов подписки: удаляет старые узлы этой подписки, добавляет свежие. */
-    suspend fun addFromSubscription(subId: String, fresh: List<Node>) = change { d ->
-        // Дедупликация по адрес+порт+протокол, лимит на подписку и уникальные id (теги ядра).
+    suspend fun addFromSubscription(subId: String, fresh: List<Node>, sourceUrl: String? = null) = change { d ->
         if (d.settings.subscriptions.none { it.id == subId }) return@change d
-        val tagged = SubscriptionManager.reconcile(d.nodes.filter { it.id.startsWith("$subId::") }, subscriptionNodes(subId, SubscriptionManager.distinct(fresh)))
+        val previous = d.nodes.filter { it.id.startsWith("$subId::") }
+        // Старые записи не хранили ссылку: для бокса с одной ссылкой заменяем их при первом обновлении.
+        val legacy = sourceUrl != null && d.settings.subscriptions.first { it.id == subId }.sources() == listOf(sourceUrl)
+        val retained = if (sourceUrl == null) emptyList() else previous.filter { it.sourceUrl != sourceUrl && !(legacy && it.sourceUrl == null) }
+        val replaced = if (sourceUrl == null) previous else previous.filter { it.sourceUrl == sourceUrl || (legacy && it.sourceUrl == null) }
+        // Сохраняем идентификаторы и правки узлов, не затрагивая остальные ссылки бокса.
+        val incoming = SubscriptionManager.distinct(fresh)
+        val tagged = SubscriptionManager.reconcile(replaced, subscriptionNodes(subId, incoming))
         val existing = d.nodes.filterNot { it.id.startsWith("$subId::") }
-        d.copy(nodes = SubscriptionManager.capPool(existing + tagged))
+        val used = (existing + retained).mapTo(HashSet()) { it.id }
+        val unique = tagged.map { node ->
+            var id = node.id
+            var index = 1
+            while (!used.add(id)) { index++; id = "${node.id}#$index" }
+            node.copy(id = id, sourceUrl = sourceUrl ?: node.sourceUrl)
+        }
+        d.copy(nodes = SubscriptionManager.capPool(existing + retained + unique))
     }
 }

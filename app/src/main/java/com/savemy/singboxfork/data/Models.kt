@@ -17,7 +17,9 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val type: String = "",
     val source: String = "",
     val folderId: String? = null,
-    val locallyEdited: Boolean = false
+    val locallyEdited: Boolean = false,
+    /** Ссылка-источник внутри бокса: отдельное обновление не затрагивает другие ссылки. */
+    val sourceUrl: String? = null
 ) {
     val protocol: String get() = type.ifEmpty { runCatching { codec.parseToJsonElement(outbound).jsonObject["type"]!!.jsonPrimitive.content }.getOrDefault("?") }
 }

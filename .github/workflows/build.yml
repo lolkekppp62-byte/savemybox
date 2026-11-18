@@ -36,7 +36,7 @@ jobs:
           ls -la "$APK"
           sha256sum "$APK"
           EXTRA=""
-          case "$VER" in 0.0.*) EXTRA="--prerelease" ;; esac
+          case "$VER" in 0.0.*|0.3.4) EXTRA="--prerelease" ;; esac
           if gh release view "v$VER" >/dev/null 2>&1; then
             echo "Версия v$VER уже опубликована. Увеличьте versionName/versionCode; APK не перезаписывается."
             exit 1

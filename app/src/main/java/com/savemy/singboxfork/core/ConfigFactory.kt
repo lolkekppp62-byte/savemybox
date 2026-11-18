@@ -66,6 +66,8 @@ object ConfigFactory {
             put("log", buildJsonObject { put("level", "warn"); put("timestamp", true); put("output", spec.logPath) })
             put("dns", buildJsonObject {
                 put("servers", buildJsonArray {
+                    // IP-адрес bootstrap не требует разрешения имени; detour на direct обязателен —
+                    // без него sing-box 1.11+ выдаёт «detour to an empty direct outbound makes no sense».
                     add(buildJsonObject { put("type", "udp"); put("tag", "bootstrap"); put("server", "1.1.1.1"); put("detour", "direct") })
                     add(buildJsonObject { put("type", "https"); put("tag", "remote"); put("server", "1.1.1.1"); put("path", "/dns-query"); put("detour", "proxy") })
                 }); put("final", "remote")
