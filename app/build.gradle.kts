@@ -11,8 +11,8 @@ android {
         applicationId = "com.savemy.singboxfork"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 5
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // В APK только arm64-v8a: полный набор ABI весит ~350 МБ и часто качается
         // на телефон неполностью, а установщик затем пишет о проблеме с файлом.
@@ -34,6 +34,13 @@ android {
     }
     buildTypes {
         debug { signingConfig = signingConfigs.getByName("shared") }
+        // Выпуск собирается тем же ключом, что и отладочная сборка: обновление ставится
+        // поверх, а в APK нет флага debuggable — на него Play Protect жалуется заметно реже.
+        release {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.getByName("shared")
+        }
     }
     buildFeatures { compose = true; buildConfig = true }
     lint {

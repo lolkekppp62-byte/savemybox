@@ -22,7 +22,7 @@ jobs:
         run: python tools/build.py
       - name: Upload
         uses: actions/upload-artifact@v4
-        with: { name: app-debug, path: app/build/outputs/apk/debug/app-debug.apk }
+        with: { name: app-release, path: app/build/outputs/apk/release/app-release.apk }
       # Приложение обновляет себя прямо из GitHub Releases: APK кладётся туда же,
       # версия берётся из versionName. Версии 0.0.* помечаются как предварительные —
       # их получает только бета-канал.
@@ -32,7 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           VER=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
-          APK=app/build/outputs/apk/debug/app-debug.apk
+          APK=app/build/outputs/apk/release/app-release.apk
           ls -la "$APK"
           sha256sum "$APK"
           EXTRA=""

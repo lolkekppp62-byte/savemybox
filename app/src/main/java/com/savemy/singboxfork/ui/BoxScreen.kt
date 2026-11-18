@@ -1,9 +1,16 @@
 package com.savemy.singboxfork.ui
 
 import android.content.Context
+import android.net.TrafficStats
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -48,6 +55,8 @@ import com.savemy.singboxfork.data.*
 import com.savemy.singboxfork.work.SubscriptionWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -143,7 +152,11 @@ import java.util.Date
                             if (old.intervalMinutes != next.intervalMinutes) com.savemy.singboxfork.work.RefreshWorker.schedule(app, next.intervalMinutes)
                             if (next.subscriptions.isNotEmpty()) SubscriptionWorker.sync(context, next.subscriptions) else SubscriptionWorker.cancelAll(context)
                             // Канал обновлений и расписания не трогают туннель: перезагрузка нужна только сетевым настройкам.
-                            if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes, updateChannel = next.updateChannel) != next) app.engine.applySettings()
+                            // Методы и вид проверки, пинг и фильтры не трогают туннель.
+                            if (old.copy(theme = next.theme, accent = next.accent, intervalMinutes = next.intervalMinutes, subIntervalMinutes = next.subIntervalMinutes, updateChannel = next.updateChannel,
+                                    probeMethod = next.probeMethod, headMode = next.headMode, getMode = next.getMode, icmpMode = next.icmpMode,
+                                    probeUrl = next.probeUrl, probeTimeoutMs = next.probeTimeoutMs, pingDisplay = next.pingDisplay,
+                                    hideDeadNodes = next.hideDeadNodes, pingFilter = next.pingFilter, nodeSort = next.nodeSort, checkMode = next.checkMode) != next) app.engine.applySettings()
                         }
                     }, openApps = { page = "Приложения" }, openRussian = { page = "Домены" },                     openSubscriptions = { page = "Боксы" }, openLogs = { page = "Журнал" }, updater = app.updater, context = context,
                         onRoamNow = { action { app.engine.roamNow() } }, onConnectVpn = onConnect)
@@ -175,7 +188,12 @@ import java.util.Date
             onAdd = { sheet = false; importing = true },
             onScan = { scan() },
             onFilter = { filter -> action { app.repository.updateSettings { it.copy(filter = filter) };app.engine.applySettings() } },
-            onSelect = { node -> action { app.repository.updateSettings { it.copy(selectedId = node.id) };app.engine.applySettings() } },
+            onSelect = { node -> action {
+                app.repository.updateSettings { it.copy(selectedId = node.id) }
+                app.engine.applySettings()
+                app.engine.message("Выбран узел: ${node.name}")
+                sheet = false
+            } },
             onCheck = { id -> scan(id) },
             onMark = { node, mark -> action { app.repository.mark(node.id, mark);app.engine.applySettings() } },
             onDelete = { node -> action { app.repository.remove(node.id);app.engine.applySettings() } },
@@ -192,21 +210,25 @@ import java.util.Date
                                 checking: Boolean, loadError: String?, onToggle: () -> Unit, onScan: () -> Unit,
                                 onServers: () -> Unit, onRefreshSubs: () -> Unit, onCheckMode: (CheckMode) -> Unit,
                                 onCheckNode: (String) -> Unit) {
+    // Когда VPN выключен, activeId пуст: показываем выбранный узел из настроек, а не «не выбран».
     val active = data.nodes.firstOrNull { it.id == connection.activeId }
+        ?: data.nodes.firstOrNull { it.id == data.settings.selectedId }
+        ?: data.preferredForMode(data.settings.routingMode)
     val sub = data.settings.subscriptions.firstOrNull { it.enabled } ?: data.settings.subscriptions.firstOrNull()
     val subNodes = sub?.let { s -> data.nodes.count { it.id.startsWith("${s.id}::") } } ?: data.nodes.size
     val connected = connection.phase == Phase.CONNECTED || connection.phase == Phase.CONNECTING
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ConnectHero(connection, checking, onToggle, onScan)
-        CheckModeRow(data.settings.checkMode, onCheckMode)
-        NodePlate(active, live[active?.id], connected, checking, onServers, onCheckNode)
+        if (connected) TrafficStrip(active, live[active?.id], data.settings.pingDisplay)
+        CheckModeRow(data.settings.checkMode, data.settings.probeMethod, onCheckMode)
+        NodePlate(active, live[active?.id], connected, checking, onServers, onCheckNode, data.settings.pingDisplay, data.settings.probeMethod)
         SubscriptionCard(sub, subNodes, onRefreshSubs, onServers)
-        if (checking) ProgressStrip(progress)
+        if (checking) ProgressStrip(progress, data.settings.probeMethod)
         connection.notice?.let { Text(it, color = Palette.Cyan, style = MaterialTheme.typography.bodyMedium) }
         loadError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         Spacer(Modifier.height(6.dp))
-        Text("TCP-пречек отсеивает мёртвые серверы, URLTest идёт только по живым. Потери запросов — не измерение потерь IP-пакетов.",
+        Text("${ProbeLabels.method(data.settings.probeMethod)}-пречек отсеивает мёртвые серверы, URLTest через ядро идёт только по живым. Потери запросов — не измерение потерь IP-пакетов.",
             style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
     }
 }
@@ -214,6 +236,12 @@ import java.util.Date
 @Composable private fun ConnectHero(connection: ConnectionState, checking: Boolean, onToggle: () -> Unit, onScan: () -> Unit) {
     val connected = connection.phase == Phase.CONNECTED || connection.phase == Phase.CONNECTING
     val accent = if (connected) Palette.Cyan else Palette.TextMuted
+    // Лёгкое дыхание кнопки: заметно при подключении и не отвлекает в спокойном состоянии.
+    val pulse = rememberInfiniteTransition(label = "Пульс подключения")
+    val glow by pulse.animateFloat(
+        initialValue = .55f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1500, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "Свечение кнопки")
     val scale by animateFloatAsState(if (connected) 1f else .92f,
         spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow), label = "Кнопка подключения")
     Surface(shape = Palette.CardShape, color = Palette.CardFill, border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()) {
@@ -226,10 +254,10 @@ import java.util.Date
             }, style = MaterialTheme.typography.titleMedium, color = Palette.TextPrimary)
             Box(Modifier.padding(vertical = 22.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(200.dp).graphicsLayer { scaleX = scale; scaleY = scale }.background(
-                    Brush.radialGradient(listOf(if (connected) Palette.Cyan.copy(alpha = .28f) else Color.Transparent, Color.Transparent)), CircleShape))
+                    Brush.radialGradient(listOf(if (connected) Palette.Cyan.copy(alpha = .28f * glow) else Color.Transparent, Color.Transparent)), CircleShape))
                 Box(Modifier.size(150.dp).clip(CircleShape)
                     .background(if (connected) Palette.Cyan.copy(alpha = .18f) else Palette.SurfaceHigh)
-                    .border(1.dp, if (connected) Palette.Cyan.copy(alpha = .55f) else Palette.CardStroke, CircleShape)
+                    .border(1.dp, if (connected) Palette.Cyan.copy(alpha = .55f * glow) else Palette.CardStroke, CircleShape)
                     .clickable(onClick = onToggle), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Icon(Icons.Rounded.PowerSettingsNew, null, Modifier.size(38.dp), tint = accent)
@@ -250,11 +278,11 @@ import java.util.Date
 }
 
 /** Переключатель перед проверкой: быстрая (по умолчанию) или точная для медленных сетей. */
-@Composable private fun CheckModeRow(mode: CheckMode, onMode: (CheckMode) -> Unit) {
+@Composable private fun CheckModeRow(mode: CheckMode, method: ProbeMethod, onMode: (CheckMode) -> Unit) {
     Surface(shape = Palette.CardShape, color = Palette.CardFill, border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Проверка узлов", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
+                Text("Проверка узлов · ${ProbeLabels.method(method)}", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
                 Text(
                     if (mode == CheckMode.FAST) "Быстрая · 20 потоков, 1.5 / 2 с" else "Точная · 3.5 / 4 с",
                     style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.TextMuted
@@ -267,7 +295,8 @@ import java.util.Date
     }
 }
 
-@Composable private fun NodePlate(node: Node?, live: NodeResult?, connected: Boolean, checking: Boolean, onOpen: () -> Unit, onCheck: (String) -> Unit) {
+@Composable private fun NodePlate(node: Node?, live: NodeResult?, connected: Boolean, checking: Boolean, onOpen: () -> Unit, onCheck: (String) -> Unit,
+                                  display: PingDisplay = PingDisplay.NUMBERS, method: ProbeMethod = ProbeMethod.TCP) {
     val status = live?.status ?: node?.status ?: CheckStatus.UNCHECKED
     val latency = live?.latencyMs ?: node?.latencyMs
     val tcp = live?.tcpMs ?: node?.tcpMs
@@ -278,17 +307,60 @@ import java.util.Date
                 Text(if (connected) "Текущий узел · скорость" else "Текущий узел", style = MaterialTheme.typography.labelMedium, color = Palette.TextMuted)
                 Text(node?.name ?: "Узел не выбран", style = MaterialTheme.typography.titleMedium, color = Palette.TextPrimary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(nodeMeta(node, status, tcp, connected), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                Text(nodeMeta(node, status, tcp, connected, method), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                     color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (node != null) {
                 IconButton(onClick = { onCheck(node.id) }, enabled = !checking) { Icon(Icons.Rounded.Refresh, "Проверить узел", tint = Palette.Cyan) }
             }
-            PingBadge(latency, status)
+            PingBadge(latency, status, display)
             Spacer(Modifier.width(10.dp))
             Text("Сменить", style = MaterialTheme.typography.labelLarge, color = Palette.Cyan)
         }
     }
+}
+
+/** Скорость загрузки и отдачи по системным счётчикам плюс пинг в выбранном стиле. */
+@Composable private fun TrafficStrip(node: Node?, live: NodeResult?, display: PingDisplay) {
+    var down by remember { mutableLongStateOf(0L) }
+    var up by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(node?.id) {
+        down = 0;up = 0
+        var lastRx = TrafficStats.getTotalRxBytes();var lastTx = TrafficStats.getTotalTxBytes()
+        var last = System.currentTimeMillis()
+        while (isActive) {
+            delay(1_000)
+            val now = System.currentTimeMillis();val rx = TrafficStats.getTotalRxBytes();val tx = TrafficStats.getTotalTxBytes()
+            val seconds = ((now - last).coerceAtLeast(1)) / 1000.0
+            if (rx >= 0 && lastRx >= 0 && rx >= lastRx) down = ((rx - lastRx) / seconds).toLong()
+            if (tx >= 0 && lastTx >= 0 && tx >= lastTx) up = ((tx - lastTx) / seconds).toLong()
+            lastRx = rx;lastTx = tx;last = now
+        }
+    }
+    val status = live?.status ?: node?.status ?: CheckStatus.UNCHECKED
+    val latency = live?.latencyMs ?: node?.latencyMs
+    Surface(shape = Palette.CardShape, color = Palette.CardFill, border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Загрузка", style = MaterialTheme.typography.labelSmall, color = Palette.TextMuted)
+                Text(speedText(down), style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = Palette.Emerald)
+            }
+            Column(Modifier.weight(1f)) {
+                Text("Отдача", style = MaterialTheme.typography.labelSmall, color = Palette.TextMuted)
+                Text(speedText(up), style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = Palette.Cyan)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("Пинг", style = MaterialTheme.typography.labelSmall, color = Palette.TextMuted)
+                PingBadge(latency, status, display)
+            }
+        }
+    }
+}
+
+private fun speedText(bytesPerSecond: Long): String = when {
+    bytesPerSecond >= 1_000_000 -> String.format(java.util.Locale.US, "%.1f МБ/с", bytesPerSecond / 1_000_000.0)
+    bytesPerSecond >= 1_000 -> "${bytesPerSecond / 1_000} КБ/с"
+    else -> "$bytesPerSecond Б/с"
 }
 
 @Composable private fun SubscriptionCard(sub: Subscription?, nodeCount: Int, onRefresh: () -> Unit, onOpen: () -> Unit) {
@@ -308,13 +380,13 @@ import java.util.Date
     }
 }
 
-@Composable private fun ProgressStrip(progress: CheckProgress?) {
+@Composable private fun ProgressStrip(progress: CheckProgress?, method: ProbeMethod = ProbeMethod.TCP) {
     Surface(shape = Palette.CardShape, color = Palette.Cyan.copy(alpha = .10f),
         border = BorderStroke(1.dp, Palette.Cyan.copy(alpha = .24f)), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(Modifier.size(18.dp), color = Palette.Cyan, strokeWidth = 2.dp)
             Spacer(Modifier.width(10.dp))
-            Text(progressLabel(progress), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.Cyan)
+            Text(progressLabel(progress, method), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.Cyan)
         }
     }
 }
@@ -338,11 +410,12 @@ import java.util.Date
     val boxes = data.settings.subscriptions
     val manual = filtered.filter { node -> boxes.none { node.id.startsWith("${it.id}::") } }
     val drawNode: @Composable (Node) -> Unit = { node ->
-        ServerRow(node, node.id == connection.activeId, checking, live[node.id],
+        ServerRow(node, node.id == (connection.activeId ?: data.settings.selectedId), checking, live[node.id],
             choosing = choosing, picked = node.id in picked,
             onSelect = onSelect, onCheck = onCheck, onMark = onMark, onDelete = { pendingDelete = node },
             onLongPress = { choosing = true; picked = picked + node.id },
-            onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id })
+            onTogglePick = { picked = if (node.id in picked) picked - node.id else picked + node.id },
+            display = data.settings.pingDisplay, method = data.settings.probeMethod)
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Palette.Surface) {
         Column(Modifier.fillMaxHeight(.92f).padding(horizontal = 20.dp)) {
@@ -371,7 +444,7 @@ import java.util.Date
                 "Выбрано: ${picked.size}. Зажмите карточку, чтобы отметить ещё.",
                 style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), color = Palette.Cyan
             )
-            if (checking) ProgressStrip(progress)
+            if (checking) ProgressStrip(progress, data.settings.probeMethod)
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
                 item(key = "panel") {
                     NodePanel(data.settings.pingFilter, data.settings.nodeSort, onPingFilter, onSort)
@@ -477,7 +550,8 @@ import java.util.Date
 @Composable private fun ServerRow(node: Node, active: Boolean, checking: Boolean, live: NodeResult?,
                                   choosing: Boolean, picked: Boolean,
                                   onSelect: (Node) -> Unit, onCheck: (String) -> Unit, onMark: (Node, Mark) -> Unit, onDelete: () -> Unit,
-                                  onLongPress: () -> Unit, onTogglePick: () -> Unit) {
+                                  onLongPress: () -> Unit, onTogglePick: () -> Unit,
+                                  display: PingDisplay = PingDisplay.NUMBERS, method: ProbeMethod = ProbeMethod.TCP) {
     val status = live?.status ?: node.status
     val latency = live?.latencyMs ?: node.latencyMs
     val scale by animateFloatAsState(
@@ -499,10 +573,10 @@ import java.util.Date
                 Column(Modifier.weight(1f)) {
                     Text((if (node.mark == Mark.BL) "BL · " else "") + node.name, style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${node.protocol.uppercase()} · ${statusText(status)}", style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                    Text("${node.protocol.uppercase()} · ${statusText(status, method)}", style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                         color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                PingBadge(latency, status)
+                PingBadge(latency, status, display)
             }
             if (!choosing) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -545,23 +619,54 @@ import java.util.Date
     Text(text, style = MaterialTheme.typography.labelLarge, color = Palette.TextMuted, modifier = Modifier.padding(top = 8.dp))
 }
 
-@Composable private fun PingBadge(latency: Long?, status: CheckStatus) {
+/** Пинг в выбранном стиле: цифры, шкала, шкала с цифрами или точки. */
+@Composable private fun PingBadge(latency: Long?, status: CheckStatus, display: PingDisplay = PingDisplay.NUMBERS) {
+    val alive = status == CheckStatus.ALIVE && latency != null
     val label = when {
-        status == CheckStatus.ALIVE && latency != null -> "$latency мс"
-        status == CheckStatus.TCP_FAILED -> "TCP"
+        alive -> "$latency мс"
+        status == CheckStatus.TCP_FAILED -> "—"
         status == CheckStatus.URL_FAILED -> "URL"
         status == CheckStatus.ALIVE -> "OK"
         else -> "—"
     }
     val color = when {
-        status == CheckStatus.ALIVE && latency != null -> pingColor(latency)
+        alive -> pingColor(latency!!)
         status == CheckStatus.TCP_FAILED -> Palette.Rose
         status == CheckStatus.URL_FAILED -> Palette.Amber
         else -> Palette.TextMuted
     }
     Surface(shape = RoundedCornerShape(10.dp), color = color.copy(alpha = .14f)) {
-        Text(label, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = color,
-            style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"))
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (display != PingDisplay.NUMBERS) PingGlyph(latency, alive, color, display)
+            if (display == PingDisplay.NUMBERS || display == PingDisplay.BAR_NUMBERS) Text(
+                label, color = color, style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
+            )
+        }
+    }
+}
+
+/** Шкала или точки вместо цифр: цвет и заполнение зависят от задержки. */
+@Composable private fun PingGlyph(latency: Long?, alive: Boolean, color: Color, display: PingDisplay) {
+    if (!alive) {
+        Text("—", color = color, style = MaterialTheme.typography.labelMedium)
+        return
+    }
+    val ms = (latency ?: 0L).coerceIn(0L, 600L)
+    if (display == PingDisplay.DOTS) {
+        val filled = when { ms <= 120L -> 3; ms <= 300L -> 2; else -> 1 }
+        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+            repeat(3) { index ->
+                Box(Modifier.size(5.dp).clip(CircleShape).background(if (index < filled) color else color.copy(alpha = .25f)))
+            }
+        }
+    } else {
+        Box(
+            Modifier.width(34.dp).height(6.dp).clip(RoundedCornerShape(3.dp)).background(color.copy(alpha = .20f)),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(Modifier.fillMaxHeight().fillMaxWidth((ms / 600f).coerceIn(.12f, 1f)).clip(RoundedCornerShape(3.dp)).background(color))
+        }
     }
 }
 
@@ -576,28 +681,28 @@ import java.util.Date
 
 private fun pingColor(ms: Long) = when { ms <= 120L -> Palette.Emerald; ms <= 300L -> Palette.Amber; else -> Palette.Rose }
 
-private fun statusText(status: CheckStatus) = when (status) {
+private fun statusText(status: CheckStatus, method: ProbeMethod = ProbeMethod.TCP) = when (status) {
     CheckStatus.UNCHECKED -> "не проверен"
-    CheckStatus.TCP_FAILED -> "TCP не отвечает"
+    CheckStatus.TCP_FAILED -> "${ProbeLabels.method(method)} не отвечает"
     CheckStatus.URL_FAILED -> "URLTest не прошёл"
     CheckStatus.ALIVE -> "работает"
 }
 
-private fun nodeMeta(node: Node?, status: CheckStatus, tcp: Long?, connected: Boolean = false): String {
+private fun nodeMeta(node: Node?, status: CheckStatus, tcp: Long?, connected: Boolean = false, method: ProbeMethod = ProbeMethod.TCP): String {
     if (node == null) return "Выберите узел, чтобы увидеть скорость"
     val parts = mutableListOf(node.protocol.uppercase())
-    tcp?.let { parts += "TCP $it мс" }
+    tcp?.let { parts += "${ProbeLabels.method(method)} $it мс" }
     node.checkedAt.takeIf { it > 0 && status == CheckStatus.ALIVE }?.let { parts += "потери ${node.lossPercent ?: 0}%" }
     if (connected && status == CheckStatus.UNCHECKED && tcp == null) parts += "нажмите «обновить», чтобы измерить"
-    if (connected && status == CheckStatus.TCP_FAILED) parts += "не отвечает — можно переключиться"
+    if (connected && status == CheckStatus.TCP_FAILED) parts += "${ProbeLabels.method(method)} не отвечает — можно переключиться"
     if (connected && status == CheckStatus.URL_FAILED) parts += "URLTest не прошёл"
     return parts.joinToString(" · ")
 }
 
-private fun progressLabel(p: CheckProgress?): String = when {
+private fun progressLabel(p: CheckProgress?, method: ProbeMethod = ProbeMethod.TCP): String = when {
     p == null -> "Проверяем узлы…"
-    p.stage == TestStage.TCP -> "TCP-проверка: ${p.done} из ${p.total}"
-    p.fallback -> "TCP не прошёл — проверяем все через URLTest: ${p.done} из ${p.total} · работают ${p.alive}"
+    p.stage == TestStage.TCP -> "${ProbeLabels.method(method)}-проверка: ${p.done} из ${p.total}"
+    p.fallback -> "${ProbeLabels.method(method)} не прошёл — проверяем все через URLTest: ${p.done} из ${p.total} · работают ${p.alive}"
     else -> "Проверка узлов: ${p.done} из ${p.total} · работают ${p.alive}"
 }
 

@@ -2,6 +2,8 @@ package com.savemy.singboxfork.core
 
 import com.savemy.singboxfork.data.CheckMode
 import com.savemy.singboxfork.data.Node
+import com.savemy.singboxfork.data.ProbeMethod
+import com.savemy.singboxfork.data.ProbeUrls
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -15,6 +17,8 @@ import com.savemy.singboxfork.data.codec
  */
 class NodeCheckRunner(
     private val tcp: TcpProbe = SocketTcpProbe(),
+    private val icmp: IcmpProbe = SystemIcmpProbe(),
+    private val http: HttpProbe = SystemHttpProbe(),
     private val mode: CheckMode = CheckMode.FAST
 ) {
     private val udpOnly = setOf("hysteria2", "tuic", "hysteria")
@@ -34,16 +38,23 @@ class NodeCheckRunner(
         checkMode: CheckMode = mode,
         onProgress: (CheckProgress) -> Unit = {},
         onBatch: suspend (List<NodeResult>) -> Unit = {},
+        /** Метод первого этапа: TCP, HTTP HEAD, HTTP GET или ICMP. */
+        probeMethod: ProbeMethod = ProbeMethod.TCP,
+        probeUrl: String = ProbeUrls.GOOGLE,
+        /** Свой таймаут в мс; 0 — значения выбранного профиля. */
+        timeoutMs: Int = 0,
         tcpOnly: Boolean = false
     ): List<Node> {
         val targets = nodes.mapNotNull(::target)
         if (targets.isEmpty()) return emptyList()
+        val firstMs = if (timeoutMs >= 500) timeoutMs else checkMode.tcpTimeoutMs
+        val testMs = if (timeoutMs >= 500) timeoutMs else checkMode.urlTimeoutMs
         val checker = NodeChecker(
-            tcp, proxy,
+            tcp, proxy, icmp, http, probeMethod, ProbeUrls.choose(probeUrl),
             tcpConcurrency = checkMode.tcpConcurrency,
             proxyConcurrency = checkMode.proxyConcurrency,
-            tcpTimeoutMs = checkMode.tcpTimeoutMs,
-            urlTimeoutMs = checkMode.urlTimeoutMs
+            tcpTimeoutMs = firstMs,
+            urlTimeoutMs = testMs
         )
         val results = checker.run(targets, attempts, onProgress, onBatch, tcpOnly)
         val byId = results.associateBy { it.id }

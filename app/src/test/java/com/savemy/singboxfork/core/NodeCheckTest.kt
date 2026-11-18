@@ -1,6 +1,7 @@
 package com.savemy.singboxfork.core
 
 import com.savemy.singboxfork.data.CheckStatus
+import com.savemy.singboxfork.data.ProbeMethod
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,6 +18,25 @@ class NodeCheckTest {
         override suspend fun connect(host: String, port: Int, timeoutMs: Int): Long? {
             calls += host
             return if (host in dead) null else 7L
+        }
+    }
+
+    /** ICMP-эхо: hosts из dead не отвечают. */
+    private class FakeIcmp(private val dead: Set<String>) : IcmpProbe {
+        val calls = Collections.synchronizedList(mutableListOf<String>())
+        override suspend fun echo(host: String, timeoutMs: Int): Long? {
+            calls += host
+            return if (host in dead) null else 12L
+        }
+    }
+
+    /** HTTP-проба на весь проход: запоминает метод и адрес. */
+    private class FakeHttp(private val ms: Long?) : HttpProbe {
+        var head: Boolean? = null
+        var url: String? = null
+        override suspend fun request(url: String, head: Boolean, timeoutMs: Int): Long? {
+            this.url = url;this.head = head
+            return ms
         }
     }
 
@@ -114,6 +134,43 @@ class NodeCheckTest {
         assertFalse(proxy.calls.contains("dead"))
         assertFalse(progress.any { it.fallback })
     }
+    @Test fun icmpMethodChecksAllTargetsAndSkipsTcp() = runBlocking {
+        val tcp = FakeTcp(emptySet())
+        val icmp = FakeIcmp(setOf("dead"))
+        val proxy = FakeProxy()
+        val results = NodeChecker(tcp, proxy, icmp = icmp, method = ProbeMethod.ICMP, batchEveryMs = 10).run(
+            listOf(ProbeTarget("dead", "dead", 443), ProbeTarget("udp", "udp.example", 443, udpOnly = true))
+        )
+        assertTrue(tcp.calls.isEmpty())
+        assertEquals(listOf("dead", "udp.example"), icmp.calls)
+        assertEquals(CheckStatus.TCP_FAILED, results.first { it.id == "dead" }.status)
+        assertEquals(12L, results.first { it.id == "udp" }.tcpMs)
+        assertEquals(CheckStatus.ALIVE, results.first { it.id == "udp" }.status)
+        assertFalse(proxy.calls.contains("dead"))
+    }
+
+    @Test fun httpHeadAsksProbeUrlOnceAndKeepsLatency() = runBlocking {
+        val http = FakeHttp(25L)
+        val results = NodeChecker(FakeTcp(emptySet()), FakeProxy(), http = http, method = ProbeMethod.HTTP_HEAD,
+            probeUrl = "https://example.test/generate_204", batchEveryMs = 10)
+            .run(listOf(ProbeTarget("a", "a", 443), ProbeTarget("b", "b", 443)))
+        assertEquals(true, http.head)
+        assertEquals("https://example.test/generate_204", http.url)
+        assertTrue(results.all { it.status == CheckStatus.ALIVE && it.tcpMs == 25L })
+    }
+
+    @Test fun httpGetFailureFallsBackToUrlTest() = runBlocking {
+        val http = FakeHttp(null)
+        val proxy = FakeProxy()
+        val progress = mutableListOf<CheckProgress>()
+        val results = NodeChecker(FakeTcp(emptySet()), proxy, http = http, method = ProbeMethod.HTTP_GET, batchEveryMs = 10)
+            .run(listOf(ProbeTarget("a", "a", 443)), onProgress = { progress += it })
+        assertEquals(false, http.head)
+        assertEquals(setOf("a"), proxy.calls.toSet())
+        assertEquals(CheckStatus.ALIVE, results.single().status)
+        assertTrue(progress.any { it.fallback })
+    }
+
     @Test fun emptyTargetsReportDone() = runBlocking {
         val progress = mutableListOf<CheckProgress>()
         val results = NodeChecker(FakeTcp(emptySet()), FakeProxy())

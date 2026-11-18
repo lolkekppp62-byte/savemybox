@@ -132,11 +132,15 @@ class Engine(private val context:Context,private val repo:Repository,private val
         mutable.value=mutable.value.copy(activeId=current?.id)
     }
     /** Двухэтапная проверка; прогресс и пакеты результатов уходят в UI только при report=true. */
-    private suspend fun measure(nodes:List<Node>,attempts:Int,report:Boolean=false,tcpOnly:Boolean=false):List<Node> =
-        runner.run(nodes,runtime.proxy,attempts,checkMode=repo.state.value.settings.checkMode,
+    private suspend fun measure(nodes:List<Node>,attempts:Int,report:Boolean=false,tcpOnly:Boolean=false):List<Node> {
+        // Метод проверки, тестовый URL и свой таймаут берутся из настроек для каждого прохода.
+        val s=repo.state.value.settings
+        return runner.run(nodes,runtime.proxy,attempts,checkMode=s.modeFor(s.probeMethod),
             onProgress={ if(report) check.value=it },
             onBatch={ batch -> if(report) results.value=results.value+batch.associateBy { it.id } },
+            probeMethod=s.probeMethod,probeUrl=s.probeUrl,timeoutMs=s.probeTimeoutMs,
             tcpOnly=tcpOnly)
+    }
     private suspend fun healthCheck() { lock.withLock {
         if(mutable.value.phase!=Phase.CONNECTED || !repo.state.value.settings.smartRouting) return@withLock
         roamLocked(manual = false)

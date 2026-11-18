@@ -1,6 +1,7 @@
 package com.savemy.singboxfork.core
 
 import com.savemy.singboxfork.data.CheckStatus
+import com.savemy.singboxfork.data.ProbeMethod
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -45,6 +46,10 @@ data class NodeResult(
 )
 
 interface TcpProbe { suspend fun connect(host: String, port: Int, timeoutMs: Int): Long? }
+/** ICMP-эхо до сервера узла. */
+interface IcmpProbe { suspend fun echo(host: String, timeoutMs: Int): Long? }
+/** HTTP-запрос к тестовому URL: head=true — HEAD, иначе GET. */
+interface HttpProbe { suspend fun request(url: String, head: Boolean, timeoutMs: Int): Long? }
 interface ProxyProbe { suspend fun urlTest(tag: String, url: String, timeoutMs: Int): Long }
 
 /** Прямой TCP-коннект из процесса приложения: только отсев мёртвых серверов, не проверка протокола. */
@@ -63,8 +68,38 @@ class SocketTcpProbe : TcpProbe {
     }
 }
 
+/** ICMP через системный резолвер: доступность сервера узла без прокси. */
+class SystemIcmpProbe : IcmpProbe {
+    override suspend fun echo(host: String, timeoutMs: Int): Long? = withContext(Dispatchers.IO) {
+        val started = System.nanoTime()
+        try {
+            if (java.net.InetAddress.getByName(host).isReachable(timeoutMs)) (System.nanoTime() - started) / 1_000_000 else null
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+}
+
+/** HTTP HEAD/GET к тестовому URL: задержка запроса и код ответа 2xx–3xx. */
+class SystemHttpProbe : HttpProbe {
+    override suspend fun request(url: String, head: Boolean, timeoutMs: Int): Long? = withContext(Dispatchers.IO) {
+        val started = System.nanoTime()
+        val connection = runCatching { java.net.URL(url).openConnection() as java.net.HttpURLConnection }.getOrNull()
+            ?: return@withContext null
+        try {
+            connection.requestMethod = if (head) "HEAD" else "GET"
+            connection.connectTimeout = timeoutMs
+            connection.readTimeout = timeoutMs
+            connection.instanceFollowRedirects = true
+            connection.setRequestProperty("User-Agent", "SaveMyBox/1.0")
+            if (connection.responseCode in 200..399) (System.nanoTime() - started) / 1_000_000 else null
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+        finally { runCatching { connection.disconnect() } }
+    }
+}
+
 /**
- * Двухэтапная проверка: массовый TCP-пречек отсеивает мёртвые серверы, URLTest через ядро идёт
+ * Двухэтапная проверка: массовый пречек отсеивает мёртвые серверы, URLTest через ядро идёт
  * только по живым. Если TCP-этап не пропустил никого (DNS перехвачен, домены блокируются, SYN
  * режется), проверка не помечает всё мёртвым: URLTest выполняется по всем узлам, а в прогрессе
  * выставляется fallback. Результаты отдаются пакетами, чтобы UI обновлялся порциями.
@@ -72,6 +107,10 @@ class SocketTcpProbe : TcpProbe {
 class NodeChecker(
     private val tcp: TcpProbe,
     private val proxy: ProxyProbe,
+    private val icmp: IcmpProbe = SystemIcmpProbe(),
+    private val http: HttpProbe = SystemHttpProbe(),
+    private val method: ProbeMethod = ProbeMethod.TCP,
+    private val probeUrl: String = DEFAULT_PROBE_URL,
     private val urls: List<String> = listOf(DEFAULT_PROBE_URL),
     private val tcpConcurrency: Int = 48,
     private val proxyConcurrency: Int = 8,
@@ -121,26 +160,39 @@ class NodeChecker(
             }
         }
         try {
-            // Этап 1: TCP-пречек. UDP-протоколы (hysteria2/tuic/hysteria) не имеют TCP-порта.
+            // Этап 1: пречек выбранным методом. UDP-протоколы (hysteria2/tuic/hysteria)
+            // не имеют TCP-порта, поэтому TCP-метод для них пропускается.
             val tcpTargets = targets.filterNot { it.udpOnly }
-            report(TestStage.TCP, tcpTargets.size)
-            val tcpLimiter = Semaphore(tcpConcurrency)
-            tcpTargets.map { target ->
-                async {
-                    tcpLimiter.withPermit {
-                        val ms = tcp.connect(target.host, target.port, tcpTimeoutMs)
-                        if (ms != null) {
-                            tcpMs[target.id] = ms
-                        } else {
-                            val failed = NodeResult(target.id, null, null, null, CheckStatus.TCP_FAILED, clock())
-                            results[target.id] = failed
-                            bufferLock.withLock { buffer += failed }
+            val stageTargets = if (method == ProbeMethod.TCP) tcpTargets else targets
+            report(TestStage.TCP, stageTargets.size)
+            if (method == ProbeMethod.TCP || method == ProbeMethod.ICMP) {
+                val firstLimiter = Semaphore(tcpConcurrency)
+                stageTargets.map { target ->
+                    async {
+                        firstLimiter.withPermit {
+                            val ms = if (method == ProbeMethod.TCP) tcp.connect(target.host, target.port, tcpTimeoutMs)
+                                     else icmp.echo(target.host, tcpTimeoutMs)
+                            if (ms != null) tcpMs[target.id] = ms
+                            finished.incrementAndGet()
+                            report(TestStage.TCP, stageTargets.size)
                         }
-                        finished.incrementAndGet()
-                        report(TestStage.TCP, tcpTargets.size)
                     }
-                }
-            }.awaitAll()
+                }.awaitAll()
+            } else {
+                // HTTP HEAD/GET — один запрос к тестовому URL на весь проход: он проверяет
+                // доступность сети и адреса, а сам узел подтверждает URLTest.
+                val ms = http.request(probeUrl, method == ProbeMethod.HTTP_HEAD, tcpTimeoutMs)
+                if (ms != null) stageTargets.forEach { tcpMs[it.id] = ms }
+                finished.set(stageTargets.size)
+                report(TestStage.TCP, stageTargets.size)
+            }
+            // Узлы без ответа на первом этапе сразу получают статус «не отвечает».
+            stageTargets.forEach { target ->
+                if (tcpMs.containsKey(target.id)) return@forEach
+                val failed = NodeResult(target.id, null, null, null, CheckStatus.TCP_FAILED, clock())
+                results[target.id] = failed
+                bufferLock.withLock { buffer += failed }
+            }
 
             if (tcpOnly) {
                 // Задержка берётся из TCP-соединения: это доступность сервера, а не проверка протокола.
@@ -158,8 +210,8 @@ class NodeChecker(
                 return@coroutineScope targets.mapNotNull { results[it.id] }
             }
 
-            // Ни один TCP-коннект не прошёл: причина может быть в DNS/фильтрации, а не в узлах.
-            fallback = tcpTargets.isNotEmpty() && tcpMs.isEmpty()
+            // Ни одна проба первого этапа не прошла: причина может быть в DNS/фильтрации, а не в узлах.
+            fallback = stageTargets.isNotEmpty() && tcpMs.isEmpty()
             val second = if (fallback) targets else targets.filter { it.udpOnly || tcpMs.containsKey(it.id) }
             finished.set(0)
             report(TestStage.URLTEST, second.size)

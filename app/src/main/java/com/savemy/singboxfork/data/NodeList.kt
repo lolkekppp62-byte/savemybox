@@ -1,6 +1,7 @@
 package com.savemy.singboxfork.data
 
 import com.savemy.singboxfork.core.NodeResult
+import kotlinx.serialization.Serializable
 
 /**
  * Профиль проверки узлов. Быстрый — 20 параллельных проб и короткие таймауты,
@@ -9,6 +10,57 @@ import com.savemy.singboxfork.core.NodeResult
 enum class CheckMode(val tcpConcurrency: Int, val proxyConcurrency: Int, val tcpTimeoutMs: Int, val urlTimeoutMs: Int) {
     FAST(20, 20, 1_500, 2_000),
     PRECISE(12, 8, 3_500, 4_000)
+}
+
+/**
+ * Метод первого этапа проверки: чем измеряется доступность узла.
+ * TCP — порт сервера, ICMP — эхо сервера, HTTP HEAD/GET — запрос к тестовому URL.
+ */
+@Serializable enum class ProbeMethod { TCP, HTTP_HEAD, HTTP_GET, ICMP }
+
+/** Стиль показа пинга: цифры, шкала, шкала с цифрами или точки. */
+@Serializable enum class PingDisplay { NUMBERS, BAR, BAR_NUMBERS, DOTS }
+
+/** Профиль проверки для выбранного метода: у каждого свои «быстрая» и «точная» настройки. */
+fun Settings.modeFor(method: ProbeMethod): CheckMode = when (method) {
+    ProbeMethod.TCP -> checkMode
+    ProbeMethod.HTTP_HEAD -> headMode
+    ProbeMethod.HTTP_GET -> getMode
+    ProbeMethod.ICMP -> icmpMode
+}
+
+/** Свой таймаут (мс) важнее профиля; 0 — брать значения быстрой или точной проверки. */
+fun Settings.firstTimeout(profile: CheckMode): Int = probeTimeoutMs.takeIf { it >= 500 } ?: profile.tcpTimeoutMs
+fun Settings.urlTimeout(profile: CheckMode): Int = probeTimeoutMs.takeIf { it >= 500 } ?: profile.urlTimeoutMs
+
+/** Тестовые URL для HTTP-проверок: Google по умолчанию плюс быстрые альтернативы. */
+object ProbeUrls {
+    const val GOOGLE = "https://www.gstatic.com/generate_204"
+    const val CLOUDFLARE = "https://cp.cloudflare.com/generate_204"
+    const val APPLE = "https://captive.apple.com/hotspot-detect.html"
+    const val FIREFOX = "https://detectportal.firefox.com/success.txt"
+    val presets = listOf("Google" to GOOGLE, "Cloudflare" to CLOUDFLARE, "Apple" to APPLE, "Firefox" to FIREFOX)
+    fun valid(url: String) = url.trim().startsWith("https://")
+    /** Пустое или некорректное значение не ломает проверку: берём Google. */
+    fun choose(url: String) = url.trim().takeIf(::valid) ?: GOOGLE
+    fun label(url: String) = presets.firstOrNull { it.second == url.trim() }?.first ?: "Свой"
+}
+
+/** Подписи метода проверки и профиля для интерфейса и журнала. */
+object ProbeLabels {
+    fun method(value: ProbeMethod): String = when (value) {
+        ProbeMethod.TCP -> "TCP"
+        ProbeMethod.HTTP_HEAD -> "HTTP HEAD"
+        ProbeMethod.HTTP_GET -> "HTTP GET"
+        ProbeMethod.ICMP -> "ICMP"
+    }
+    fun mode(value: CheckMode): String = if (value == CheckMode.FAST) "быстрая" else "точная"
+    fun display(value: PingDisplay): String = when (value) {
+        PingDisplay.NUMBERS -> "В цифрах (мс)"
+        PingDisplay.BAR -> "Шкала"
+        PingDisplay.BAR_NUMBERS -> "Шкала и цифры"
+        PingDisplay.DOTS -> "Точки"
+    }
 }
 
 /** Фильтр списка узлов по пингу. */

@@ -69,8 +69,8 @@ def main():
         stamp.write_text(json.dumps(dict(expected,sha256=hashlib.sha256(aar.read_bytes()).hexdigest()),indent=2))
     launcher=gradle/'bin'/('gradle.bat' if os.name=='nt' else 'gradle')
     if os.name!='nt': launcher.chmod(0o755)
-    run([launcher,'--no-daemon',':app:testDebugUnitTest',':app:lintDebug',':app:assembleDebug'])
-    apk=ROOT/'app/build/outputs/apk/debug/app-debug.apk'
+    run([launcher,'--no-daemon',':app:testDebugUnitTest',':app:lintDebug',':app:assembleRelease'])
+    apk=ROOT/'app/build/outputs/apk/release/app-release.apk'
     print('APK: '+str(apk))
     if args.install: run([sdk/'platform-tools'/('adb.exe' if os.name=='nt' else 'adb'),'install','-r',apk])
 if __name__=='__main__':

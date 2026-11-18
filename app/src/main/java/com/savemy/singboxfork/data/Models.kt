@@ -49,6 +49,17 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val presetIds: Set<String> = setOf("rf-gov", "ru-banks", "ru-market", "ru-media", "lan-p2p"),
     /** Быстрая проверка включена по умолчанию. */
     val checkMode: CheckMode = CheckMode.FAST,
+    /** Метод первого этапа: TCP, HTTP HEAD, HTTP GET или ICMP. */
+    val probeMethod: ProbeMethod = ProbeMethod.TCP,
+    val headMode: CheckMode = CheckMode.FAST,
+    val getMode: CheckMode = CheckMode.FAST,
+    val icmpMode: CheckMode = CheckMode.FAST,
+    /** Тестовый URL для HTTP-проверок; по умолчанию Google. */
+    val probeUrl: String = ProbeUrls.GOOGLE,
+    /** Свой таймаут проверки в мс; 0 — значения выбранного профиля. */
+    val probeTimeoutMs: Int = 0,
+    /** Как показывать пинг: цифры, шкала, шкала с цифрами или точки. */
+    val pingDisplay: PingDisplay = PingDisplay.NUMBERS,
     /** Нерабочие узлы убираются в папку «Не отвечает». */
     val hideDeadNodes: Boolean = true,
     val pingFilter: PingFilterState = PingFilterState.ALL,
