@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PresetManagerTest {
-    @Test fun bothSidesHaveFiveFarwaterPacks() {
+    @Test fun bothSidesHaveFivePresetPacks() {
         assertEquals(5, PresetManager.bySide(PresetSide.WHITELIST).size)
         assertEquals(5, PresetManager.bySide(PresetSide.BLACKLIST).size)
         assertEquals(PresetManager.presets.size, PresetManager.presets.map { it.id }.distinct().size)

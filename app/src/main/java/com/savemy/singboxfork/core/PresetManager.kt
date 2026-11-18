@@ -6,7 +6,7 @@ import com.savemy.singboxfork.data.normalizeRules
 enum class PresetSide { WHITELIST, BLACKLIST }
 
 /**
- * Тематический пак Фарватера: домены, подсети и известные Android-пакеты.
+ * Тематический пак правил: домены, подсети и известные Android-пакеты.
  * torrent — P2P/BitTorrent в обход VPN (только для локального пака).
  */
 data class FvPreset(
@@ -23,7 +23,7 @@ data class FvPreset(
 }
 
 /**
- * Встроенные пресеты в стиле Фарватера. Пакеты — известные имена приложений;
+ * Встроенные пресеты. Пакеты — известные имена приложений;
  * реально установленные из них подтягиваются автоматически через [installedApps].
  */
 object PresetManager {

@@ -27,7 +27,7 @@ object ConfigFactory {
     fun build(spec: CoreSpec): String {
         val data = spec.data
         val s = data.settings
-        // Пресеты Фарватера и ручные правила сводятся в один набор: БС -> direct, ЧС -> proxy.
+        // Встроенные пресеты и ручные правила сводятся в один набор: БС -> direct, ЧС -> proxy.
         val routing = SmartRouter.effective(
             profile = s.routing,
             mode = s.routingMode,

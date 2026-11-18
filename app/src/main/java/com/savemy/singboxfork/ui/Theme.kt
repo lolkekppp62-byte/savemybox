@@ -26,7 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.savemy.singboxfork.data.Settings
 
-/** Палитра OriginOS/Фарватер: глубокий фон, атомарные карточки, циан для VPN, изумруд для пинга. */
+/** Палитра OriginOS: глубокий фон, атомарные карточки, циан для VPN, изумруд для пинга. */
 object Palette {
     val Ink = Color(0xFF0B0D12)
     val Surface = Color(0xFF12151C)

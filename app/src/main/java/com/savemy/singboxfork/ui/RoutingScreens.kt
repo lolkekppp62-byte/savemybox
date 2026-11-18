@@ -80,7 +80,7 @@ internal fun accentOf(side: PresetSide): Color =
     }
 }
 
-/** Карточка пресета Фарватера: название, счётчики доменов и найденных приложений, тумблер. */
+/** Карточка встроенного пресета: название, счётчики доменов и найденных приложений, тумблер. */
 @Composable internal fun PresetCard(preset: FvPreset, enabled: Boolean, installedCount: Int, onToggle: (Boolean) -> Unit) {
     val accent = accentOf(preset.side)
     val glow by animateFloatAsState(
@@ -163,12 +163,12 @@ internal fun accentOf(side: PresetSide): Color =
             TextButton(back) { Text("Назад") }
             Text("Приложения БС и ЧС", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "Пресеты Фарватера сами подставляют установленные приложения. Ниже можно вручную добавить или убрать любое приложение.",
+                "Встроенные пресеты сами подставляют установленные приложения. Ниже можно вручную добавить или убрать любое приложение.",
                 style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted
             )
         }
         item { SideSelector(side) { side = it } }
-        item { SectionLabel("Пресеты Фарватера · ${PresetManager.bySide(side).size}") }
+        item { SectionLabel("Пресеты · ${PresetManager.bySide(side).size}") }
         items(PresetManager.bySide(side), key = { it.id }) { preset ->
             PresetCard(preset, preset.id in settings.presetIds, PresetManager.installedApps(preset, installed).size) { enabled ->
                 change { s -> s.copy(presetIds = if (enabled) s.presetIds + preset.id else s.presetIds - preset.id) }
