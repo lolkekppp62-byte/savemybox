@@ -49,7 +49,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
             scope.launch { runCatching { checkNodes(setOf(selected.id)) } }
         } catch(e:CancellationException) { runtime.stop();mutable.value=ConnectionState();throw e }
         catch(e:Exception) {
-            runtime.stop(); mutable.value=ConnectionState(Phase.ERROR,notice="Не удалось запустить VPN. Проверьте узел, разрешение VPN и конфигурацию.")
+            runtime.stop(); mutable.value=ConnectionState(Phase.ERROR,notice="Не удалось запустить VPN: ${Diagnostics.describe(e)}. Проверьте разрешение VPN и конфигурацию узла.")
             journal.add("Ошибка запуска VPN (${e.javaClass.simpleName})")
         }
     } }
@@ -61,7 +61,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
             health=null;runtime.stop();mutable.value=ConnectionState();journal.add("VPN отключён")
         }
     }
-    suspend fun checkAll(id:String?=null):List<Node> = scan(autoSelectBest = id==null) { data -> if(id==null) data.filtered() else data.nodes.filter { it.id==id } }
+    suspend fun checkAll(id:String?=null):List<Node> = scan(autoSelectBest = id==null) { data -> if(id==null) data.nodes else data.nodes.filter { it.id==id } }
     /** Проверка только отмеченных узлов: остальные не трогаем. */
     suspend fun checkNodes(ids:Collection<String>):List<Node> = scan(autoSelectBest = false) { data -> data.nodes.filter { it.id in ids } }
     private suspend fun scan(autoSelectBest:Boolean=false,pick:(AppData)->List<Node>):List<Node> = withContext(Dispatchers.IO) { lock.withLock {
@@ -94,10 +94,11 @@ class Engine(private val context:Context,private val repo:Repository,private val
             }
             val alive = result.filter { it.latencyMs != null }.sortedBy { it.latencyMs!! }
             journal.add("Проверено узлов: ${result.size}; работают: ${alive.size}")
-            if (autoSelectBest) {
+            // TCP без рабочего ядра не подтверждает прокси и не может запускать VPN.
+            if (autoSelectBest && coreError == null) {
                 val current = repo.state.value
                 val allowed = current.candidates(current.settings.routingMode).map { it.id }.toSet()
-                val best = alive.firstOrNull { it.id in allowed }
+                val best = SmartRouter.bestChecked(result, allowed, coreError == null)
                 if (best != null) {
                     val connected = mutable.value.phase == Phase.CONNECTED
                     if (connected) {
@@ -114,7 +115,7 @@ class Engine(private val context:Context,private val repo:Repository,private val
                     mutable.value = mutable.value.copy(notice = "Рабочие узлы есть, но все отфильтрованы (режим/BL)")
                 }
             }
-            alive
+            if (coreError == null) alive else emptyList()
         } catch(e:CancellationException) { throw e }
         catch(e:Exception) {
             journal.add("Ошибка проверки (${e.javaClass.simpleName})")

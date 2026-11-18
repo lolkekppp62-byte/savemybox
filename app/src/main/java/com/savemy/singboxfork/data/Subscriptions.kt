@@ -14,6 +14,31 @@ const val MAX_ACTIVE_POOL = 500
  * разбираются одним и тем же импортёром узлов.
  */
 object SubscriptionManager {
+    /** Совместимо с API 26; чтение ограничено до выделения больших буферов. */
+    fun readList(stream: java.io.InputStream): String {
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            require(out.size() + count <= 1_000_000) { "Список слишком большой" }
+            out.write(buffer, 0, count)
+        }
+        return out.toByteArray().decodeToString()
+    }
+    fun reconcile(old: List<Node>, incoming: List<Node>): List<Node> {
+        val used = HashSet<String>()
+        return incoming.map { fresh ->
+            val previous = old.firstOrNull { it.id == fresh.id } ?: old.firstOrNull { identity(it) == identity(fresh) }
+            var result = if (previous == null) fresh else if (previous.locallyEdited) previous
+                else fresh.copy(id = previous.id, name = previous.name, mark = previous.mark, folderId = previous.folderId)
+            val base = result.id
+            var suffix = 1
+            while (!used.add(result.id)) { suffix++; result = result.copy(id = "$base#$suffix") }
+            result
+        }
+    }
+
     fun looksLikeUrl(text: String): Boolean {
         val value = text.trim()
         return value.startsWith("https://", true) || value.startsWith("http://", true)

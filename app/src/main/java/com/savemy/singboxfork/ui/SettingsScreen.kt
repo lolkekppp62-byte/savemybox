@@ -94,45 +94,7 @@ import kotlinx.coroutines.withContext
         item { Section("Проверка узлов") {
             Toggle("Убирать нерабочие узлы в папку «Не отвечает»",s.hideDeadNodes) { value -> change { it.copy(hideDeadNodes=value) } }
             Text("Неотвечающие узлы сворачиваются внизу списка. Общая проверка проходит и по ним: ответивший узел сам возвращается наверх.",style=MaterialTheme.typography.bodySmall)
-            Text("Метод проверки и профиль")
-            fun setMode(method:ProbeMethod,mode:CheckMode)=change { st -> when(method) {
-                ProbeMethod.TCP -> st.copy(checkMode=mode)
-                ProbeMethod.HTTP_HEAD -> st.copy(headMode=mode)
-                ProbeMethod.HTTP_GET -> st.copy(getMode=mode)
-                ProbeMethod.ICMP -> st.copy(icmpMode=mode)
-            } }
-            ProbeMethod.entries.forEach { method ->
-                Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                    FilterChip(s.probeMethod==method,{change { it.copy(probeMethod=method) }},label={Text(ProbeLabels.method(method))})
-                    Spacer(Modifier.weight(1f))
-                    FilterChip(s.modeFor(method)==CheckMode.FAST,{setMode(method,CheckMode.FAST)},label={Text("Быстрая")})
-                    Spacer(Modifier.width(6.dp))
-                    FilterChip(s.modeFor(method)==CheckMode.PRECISE,{setMode(method,CheckMode.PRECISE)},label={Text("Точная")})
-                }
-            }
-            Text("TCP — порт сервера узла. ICMP — эхо сервера. HTTP HEAD и HTTP GET — запрос к тестовому URL. Узел в любом случае подтверждается проверкой через ядро (URLTest).",style=MaterialTheme.typography.bodySmall)
-            Text("Тестовый URL · ${ProbeUrls.label(s.probeUrl)}")
-            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                ProbeUrls.presets.forEach { (label,url) -> FilterChip(s.probeUrl==url,{change { it.copy(probeUrl=url) }},label={Text(label)}) }
-            }
-            OutlinedTextField(customUrl,{customUrl=it;probeError=null},label={Text("Свой URL (HTTPS)")},singleLine=true,modifier=Modifier.fillMaxWidth())
-            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                Button({ if(ProbeUrls.valid(customUrl)) { change { it.copy(probeUrl=customUrl.trim()) };probeError=null } else probeError="Нужен адрес https://…" }) { Text("Сохранить URL") }
-                OutlinedButton({ customUrl="";change { it.copy(probeUrl=ProbeUrls.GOOGLE) };probeError=null }) { Text("Сбросить на Google") }
-            }
-            Text("По умолчанию Google (generate_204). Cloudflare, Apple и Firefox отвечают коротким кодом 204 или 200.",style=MaterialTheme.typography.bodySmall)
-            Text("Таймаут проверки: ${if(s.probeTimeoutMs>0) "${s.probeTimeoutMs} мс" else "по профилю (${s.modeFor(s.probeMethod).tcpTimeoutMs} / ${s.modeFor(s.probeMethod).urlTimeoutMs} мс)"}")
-            OutlinedTextField(timeoutText,{timeoutText=it;probeError=null},label={Text("Свой таймаут, мс (пусто — авто)")},singleLine=true,modifier=Modifier.fillMaxWidth())
-            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                Button({ runCatching {
-                    val ms=if(timeoutText.isBlank()) 0 else timeoutText.trim().toInt()
-                    require(ms==0 || ms in 500..20000) { "Таймаут от 500 до 20000 мс" }
-                    change { it.copy(probeTimeoutMs=ms) };probeError=null
-                }.onFailure { probeError=it.message } }) { Text("Сохранить таймаут") }
-                OutlinedButton({ timeoutText="";change { it.copy(probeTimeoutMs=0) };probeError=null }) { Text("Авто") }
-            }
-            probeError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
-            Text("Шкала быстрой проверки — 1.5 / 2 с, точной — 3.5 / 4 с. Свой таймаут применяется к обоим этапам.",style=MaterialTheme.typography.bodySmall)
+            Text("Метод, профиль, тестовый URL и таймаут находятся в шторке «Проверка узлов» на главной.",style=MaterialTheme.typography.bodySmall)
             Text("Отображение пинга")
             FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 PingDisplay.entries.forEach { value -> FilterChip(s.pingDisplay==value,{change { it.copy(pingDisplay=value) }},label={Text(ProbeLabels.display(value))}) }
@@ -163,12 +125,12 @@ import kotlinx.coroutines.withContext
             Text("Установлено: ${BuildConfig.VERSION_NAME} (сборка ${BuildConfig.VERSION_CODE})")
             Text("Канал обновлений")
             FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                listOf(UpdateChannel.STABLE to "Стабильные",UpdateChannel.BETA to "Бета · 0.0.*").forEach { (channel,label) ->
+                listOf(UpdateChannel.STABLE to "Стабильные",UpdateChannel.BETA to "Предварительные").forEach { (channel,label) ->
                     FilterChip(s.updateChannel==channel,{change { it.copy(updateChannel=channel) }},label={Text(label)})
                 }
             }
             Text(
-                if(s.updateChannel==UpdateChannel.BETA) "Бета получает только версии 0.0.* — они могут быть нестабильными"
+                if(s.updateChannel==UpdateChannel.BETA) "Предварительный канал получает в том числе 0.3.1. Сборки могут быть нестабильными."
                 else "Стабильный канал: выпуски без пометки «бета»",
                 style=MaterialTheme.typography.bodySmall)
             when (val st = update) {

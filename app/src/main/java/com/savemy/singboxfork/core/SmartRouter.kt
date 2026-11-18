@@ -32,6 +32,10 @@ data class EffectiveRouting(
 
 /** Решение Smart Routing без побочных эффектов: что делать после неудачной проверки активного узла. */
 object SmartRouter {
+    /** Первый этап не считается подтверждением, если ядро не запустилось. */
+    fun bestChecked(results: List<Node>, allowed: Set<String>, proxyConfirmed: Boolean): Node? =
+        if (!proxyConfirmed) null else results.filter { it.id in allowed && it.status == CheckStatus.ALIVE && it.latencyMs != null }.minByOrNull { it.latencyMs!! }
+
     /**
      * null — активный узел работает или запасных нет.
      * Иначе — самый быстрый проверенный узел со статусом ALIVE.

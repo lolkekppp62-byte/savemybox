@@ -34,7 +34,11 @@ object Importer : NodeParser {
             }
             require(entries.isNotEmpty()) { "Не найдено поддерживаемых узлов в списке" }
             require(entries.size <= 200) { "За один раз можно добавить не более 200 узлов" }
-            return entries.map { (name, value) -> node(name, value, mark) }
+            return entries.mapIndexed { index, (name, value) ->
+                val parsed = node(name, value, mark)
+                parsed.copy(source = if (entries.size == 1 && !input.startsWith("[") && !input.contains('\n')) input else value.toString(),
+                    name = if (name.isNullOrBlank() && value["tag"] == null) "Свой узел #${index + 1}" else parsed.name)
+            }
         } catch (e: Exception) {
             // Не возвращаем сообщения URI/JSON-парсера: они могут содержать пароль.
             if (e is IllegalArgumentException && e.message?.let { it.startsWith("В ") || it.startsWith("Узел ") || it.startsWith("Этот ") || it.startsWith("Порт ") || it.startsWith("Не ") || it.startsWith("За ") || it.startsWith("Вставьте ") || it.startsWith("Параметр ") } == true) throw e

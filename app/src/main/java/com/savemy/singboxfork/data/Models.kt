@@ -14,7 +14,10 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val tcpMs: Long? = null, val status: CheckStatus = CheckStatus.UNCHECKED,
     val checkedAt: Long = 0,
     /** Тип протокола, заполняется парсером; для старых записей пуст и берётся из outbound. */
-    val type: String = ""
+    val type: String = "",
+    val source: String = "",
+    val folderId: String? = null,
+    val locallyEdited: Boolean = false
 ) {
     val protocol: String get() = type.ifEmpty { runCatching { codec.parseToJsonElement(outbound).jsonObject["type"]!!.jsonPrimitive.content }.getOrDefault("?") }
 }
@@ -73,10 +76,11 @@ val codec = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val routing: RoutingProfile = RoutingProfile(),
     val advancedMode: Boolean = false,
     val advancedJson: String = "",
-    /** Канал обновлений: стабильные выпуски или бета 0.0.*. */
+    /** Канал обновлений: стабильные либо предварительные выпуски. */
     val updateChannel: UpdateChannel = UpdateChannel.STABLE
 )
-@Serializable data class AppData(val nodes: List<Node> = emptyList(), val settings: Settings = Settings())
+@Serializable data class NodeFolder(val id: String = UUID.randomUUID().toString(), val name: String)
+@Serializable data class AppData(val nodes: List<Node> = emptyList(), val settings: Settings = Settings(), val folders: List<NodeFolder> = emptyList())
 fun AppData.filtered(): List<Node> = nodes.filter { settings.filter == NodeFilter.ALL || it.mark.name == settings.filter.name }
 fun AppData.candidates(): List<Node> = filtered().filter { it.mark != Mark.BL }
 object Interval {

@@ -25,6 +25,14 @@ class UpdatesTest {
         ]
     """.trimIndent()
 
+    @Test fun prerelease031IsOfferedOnlyInPreviewChannel() {
+        val releases = listOf(release("0.3.0"), release("0.3.1", pre = true))
+        assertEquals("0.3.1", UpdateLogic.available(releases, UpdateChannel.BETA, "0.3.0")?.version)
+        assertNull(UpdateLogic.available(releases, UpdateChannel.STABLE, "0.3.0"))
+        assertNull(UpdateLogic.available(releases, UpdateChannel.BETA, "0.3.1"))
+        assertNull(UpdateLogic.available(releases, UpdateChannel.BETA, "0.4.0"))
+    }
+
     @Test fun versionsCompareNumerically() {
         assertEquals(0, UpdateLogic.compare("0.1.2", "0.1.2"))
         assertTrue(UpdateLogic.isNewer("0.1.2", "0.1.1"))

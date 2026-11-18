@@ -41,9 +41,9 @@ object UpdateLogic {
 
     fun isNewer(candidate: String, current: String): Boolean = compare(candidate, current) > 0
 
-    /** Бета-канал получает только 0.0.*; стабильный — всё остальное, без prerelease. */
+    /** Предварительный канал получает legacy-бету 0.0.* и prerelease; стабильный исключает оба вида. */
     fun matches(channel: UpdateChannel, release: ReleaseInfo): Boolean = when (channel) {
-        UpdateChannel.BETA -> release.beta
+        UpdateChannel.BETA -> release.beta || release.prerelease
         UpdateChannel.STABLE -> !release.beta && !release.prerelease
     }
 
@@ -56,7 +56,7 @@ object UpdateLogic {
         val latest = candidates.maxWithOrNull { a, b -> compare(a.version, b.version) } ?: return null
         val sameLine = channel == UpdateChannel.BETA && current.startsWith("0.0.")
         val newer = if (sameLine) isNewer(latest.version, current) else isNewer(latest.version, current) || channel == UpdateChannel.BETA
-        return latest.takeIf { newer && it.version != current }
+        return latest.takeIf { newer && it.version != current && (it.beta || isNewer(it.version, current)) }
     }
 
     /** Ответ GitHub Releases. Битые элементы и выпуски без APK пропускаются. */

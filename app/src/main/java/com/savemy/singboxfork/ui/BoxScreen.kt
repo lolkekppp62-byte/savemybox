@@ -78,7 +78,13 @@ import java.util.Date
     var sheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     fun action(block:suspend ()->Unit) { scope.launch { try { app.ready.await();block() } catch(e:CancellationException) { throw e } catch(e:Exception) { error=e.message ?: "Операция не выполнена" } } }
-    fun scan(id:String?=null) { action { app.engine.checkAll(id) } }
+    fun scan(id:String?=null) { action {
+        val alive = app.engine.checkAll(id)
+        val selected = app.repository.state.value.settings.selectedId
+        if (id == null && app.engine.state.value.phase != Phase.CONNECTED &&
+            alive.any { it.id == selected && it.status == CheckStatus.ALIVE } &&
+            app.repository.state.value.candidates(app.repository.state.value.settings.routingMode).any { it.id == selected }) onConnect()
+    } }
     fun scanNodes(ids:Set<String>) { action { app.engine.checkNodes(ids) } }
     val connected = connection.phase==Phase.CONNECTED || connection.phase==Phase.CONNECTING
     BoxTheme(data.settings) {
@@ -124,7 +130,8 @@ import java.util.Date
                             SubscriptionWorker.schedule(context, sub)
                         } },
                         onRemove = { id -> action {
-                            app.repository.updateSettings { s -> s.copy(subscriptions = s.subscriptions.filterNot { it.id == id }) }
+                            app.repository.removeSubscription(id)
+                            app.engine.applySettings()
                             SubscriptionWorker.cancel(context, id)
                         } },
                         onRefresh = { id -> action { SubscriptionWorker.refreshNow(context, id) } },
@@ -143,7 +150,17 @@ import java.util.Date
                         onServers = { sheet = true },
                         onRefreshSubs = { refreshSubscriptions(context, app) },
                         onCheckMode = { mode -> action { app.repository.updateSettings { it.copy(checkMode = mode) } } },
-                        onCheckNode = { id -> scan(id) })
+                        onCheckNode = { id -> scan(id) },
+                        probeChange = { transform -> action { app.repository.updateSettings(transform) } },
+                        nodesContent = {
+                            HomeNodes(data, checking, onAdd = { importing = true }, onCheckGroup = { scanNodes(it) },
+                                onSelect = { node -> action { app.repository.updateSettings { it.copy(selectedId = node.id) }; app.engine.applySettings() } },
+                                onCheck = { scan(it) },
+                                onDelete = { node -> action { app.repository.remove(node.id); app.engine.applySettings() } },
+                                onEdit = { node, name, source, mark, folder -> action { app.repository.editNode(node.id, name, source, mark, folder); app.engine.applySettings() } },
+                                onFolder = { name -> action { app.repository.addFolder(name) } },
+                                onCombine = { ids, name -> action { app.repository.combine(ids, name) } })
+                        })
                     else SettingsScreen(data, change = { transform ->
                         action {
                             val old = app.repository.state.value.settings
@@ -170,9 +187,7 @@ import java.util.Date
                 require(url.protocol.equals("https", true)) { "Поддерживаются только HTTPS-ссылки" }
                 val connection = url.openConnection().apply { connectTimeout = 15_000;readTimeout = 30_000;setRequestProperty("User-Agent", "SavemyBox/1.0") }
                 val raw = connection.getInputStream().use { stream ->
-                    val bytes = stream.readNBytes(1_000_001)
-                    require(bytes.size <= 1_000_000) { "Список слишком большой (максимум 1 МБ)" }
-                    bytes.decodeToString()
+                    SubscriptionManager.readList(stream)
                 }
                 runCatching { String(java.util.Base64.getDecoder().decode(raw.trim())) }
                     .getOrElse { runCatching { String(java.util.Base64.getMimeDecoder().decode(raw.trim())) }.getOrElse { raw } }
@@ -209,7 +224,8 @@ import java.util.Date
 @Composable private fun MainPane(data: AppData, connection: ConnectionState, progress: CheckProgress?, live: Map<String, NodeResult>,
                                 checking: Boolean, loadError: String?, onToggle: () -> Unit, onScan: () -> Unit,
                                 onServers: () -> Unit, onRefreshSubs: () -> Unit, onCheckMode: (CheckMode) -> Unit,
-                                onCheckNode: (String) -> Unit) {
+                                onCheckNode: (String) -> Unit, probeChange: ((Settings) -> Settings) -> Unit,
+                                nodesContent: @Composable () -> Unit) {
     // Когда VPN выключен, activeId пуст: показываем выбранный узел из настроек, а не «не выбран».
     val active = data.nodes.firstOrNull { it.id == connection.activeId }
         ?: data.nodes.firstOrNull { it.id == data.settings.selectedId }
@@ -221,7 +237,8 @@ import java.util.Date
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ConnectHero(connection, checking, onToggle, onScan)
         if (connected) TrafficStrip(active, live[active?.id], data.settings.pingDisplay)
-        CheckModeRow(data.settings.checkMode, data.settings.probeMethod, onCheckMode)
+        ProbePanel(data.settings, probeChange)
+        nodesContent()
         NodePlate(active, live[active?.id], connected, checking, onServers, onCheckNode, data.settings.pingDisplay, data.settings.probeMethod)
         SubscriptionCard(sub, subNodes, onRefreshSubs, onServers)
         if (checking) ProgressStrip(progress, data.settings.probeMethod)

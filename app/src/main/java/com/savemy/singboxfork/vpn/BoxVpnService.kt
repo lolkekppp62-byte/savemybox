@@ -30,8 +30,15 @@ class BoxVpnService : VpnService() {
     private fun notifyStatus(text: String) { getSystemService(NotificationManager::class.java).notify(1,notification(text)) }
     override fun onStartCommand(intent: Intent?,flags: Int,startId: Int): Int {
         if(intent?.action=="stop") { scope.launch { app.engine.disconnect(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }; return START_NOT_STICKY }
-        if(Build.VERSION.SDK_INT>=34) startForeground(1,notification("Подключение…"),ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
-        else startForeground(1,notification("Подключение…"))
+        try {
+            check(prepare(this) == null) { "Разрешение VPN не получено" }
+            if(Build.VERSION.SDK_INT>=34) startForeground(1,notification("Подключение…"),ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+            else startForeground(1,notification("Подключение…"))
+        } catch (e: Exception) {
+            app.engine.message("Android не разрешил запуск VPN: ${com.savemy.singboxfork.core.Diagnostics.describe(e)}")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         scope.launch {
             app.ready.await()
             if(app.engine.state.value.phase!=Phase.CONNECTED) app.engine.connect(this@BoxVpnService)

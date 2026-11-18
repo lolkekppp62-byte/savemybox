@@ -46,6 +46,32 @@ class CoreTest {
         assertEquals(1400,config["inbounds"]!!.jsonArray.first().jsonObject["mtu"]!!.jsonPrimitive.int)
         assertTrue(config["inbounds"]!!.jsonArray.first().jsonObject["exclude_package"]!!.jsonArray.any { it.jsonPrimitive.content=="com.example.app" })
     }
+    @Test fun malformedNodeIsNotReferencedBySelector() {
+        val valid = node().copy(id = "valid")
+        val bad = valid.copy(id = "broken", outbound = "{")
+        val config = codec.parseToJsonElement(ConfigFactory.create(AppData(listOf(bad, valid), Settings(selectedId = "broken")), true, 12345, "s", "log")).jsonObject
+        val selector = config["outbounds"]!!.jsonArray.last().jsonObject
+        assertEquals(listOf("valid"), selector["outbounds"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("valid", selector["default"]!!.jsonPrimitive.content)
+    }
+    @Test fun oldStorageReadsAndNewFoldersRoundTrip() {
+        assertTrue(codec.decodeFromString<AppData>("{}").folders.isEmpty())
+        val folder = NodeFolder(name = "Личные")
+        val data = AppData(listOf(node().copy(source = "trojan://p@example.com:443", folderId = folder.id)), folders = listOf(folder))
+        val restored = codec.decodeFromString<AppData>(codec.encodeToString(AppData.serializer(), data))
+        assertEquals(data, restored)
+    }
+    @Test fun importedSingleFromListHasEditableStandaloneSource() {
+        val nodes = Importer.parse("# comment\ntrojan://p@example.com:443\nunsupported://foo")
+        assertEquals(1, nodes.size)
+        assertEquals(1, Importer.parse(nodes.single().source).size)
+        assertEquals("Свой узел #1", nodes.single().name)
+    }
+    @Test fun probeUrlRejectsBrokenOrCredentialAddress() {
+        assertFalse(ProbeUrls.valid("https://"))
+        assertFalse(ProbeUrls.valid("https://user:pass@example.com/"))
+        assertTrue(ProbeUrls.valid(ProbeUrls.FIREFOX))
+    }
     @Test fun emptyVpnFailsClosed() { assertThrows(IllegalArgumentException::class.java) { ConfigFactory.create(AppData(),true,12456,"secret","log") } }
     @Test fun packetRecoveryOnlyTuic() {
         val n=Importer.parse("tuic://$uuid:p@example.com:443").single()

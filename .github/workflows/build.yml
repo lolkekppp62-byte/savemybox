@@ -24,8 +24,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with: { name: app-release, path: app/build/outputs/apk/release/app-release.apk }
       # Приложение обновляет себя прямо из GitHub Releases: APK кладётся туда же,
-      # версия берётся из versionName. Версии 0.0.* помечаются как предварительные —
-      # их получает только бета-канал.
+      # версия берётся из versionName. Предварительными помечаются только 0.0.* —
+      # их получает бета-канал; обычный выпуск виден и стабильному каналу.
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -38,10 +38,11 @@ jobs:
           EXTRA=""
           case "$VER" in 0.0.*) EXTRA="--prerelease" ;; esac
           if gh release view "v$VER" >/dev/null 2>&1; then
-            gh release upload "v$VER" "$APK#SaveMyBox-$VER.apk" --clobber
+            echo "Версия v$VER уже опубликована. Увеличьте versionName/versionCode; APK не перезаписывается."
+            exit 1
           else
             gh release create "v$VER" "$APK#SaveMyBox-$VER.apk" \
-              --title "SaveMyBox $VER" \
+              --title "$VER" \
               --notes "Сборка $VER. Обновление ставится из приложения: Настройки → Обновления." \
               $EXTRA
           fi

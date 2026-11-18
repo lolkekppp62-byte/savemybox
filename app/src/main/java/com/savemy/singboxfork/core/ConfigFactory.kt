@@ -42,9 +42,10 @@ object ConfigFactory {
         // поэтому такие узлы отбрасываются поштучно.
         val tags = HashSet<String>(data.nodes.size * 2)
         val outbounds = data.nodes.mapNotNull { node ->
-            if (!tags.add(node.id)) return@mapNotNull null
+            if (node.id in tags || node.id in setOf("direct", "proxy")) return@mapNotNull null
             val obj = runCatching { codec.parseToJsonElement(node.outbound).jsonObject.toMutableMap() }.getOrNull()
                 ?: return@mapNotNull null
+            tags.add(node.id)
             obj["tag"] = JsonPrimitive(node.id)
             // Для TUIC режим stream передаёт UDP надёжным потоком QUIC, ценой задержек.
             if (node.protocol == "tuic" && s.packetRecovery) { obj["udp_relay_mode"] = JsonPrimitive("quic"); obj.remove("udp_over_stream") }

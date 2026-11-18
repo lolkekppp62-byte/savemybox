@@ -46,9 +46,7 @@ class SubscriptionWorker(context: Context, params: WorkerParameters) : Coroutine
                         connectTimeout = 15_000; readTimeout = 30_000
                         setRequestProperty("User-Agent", "SavemyBox/1.0")
                     }.getInputStream().use { stream ->
-                        val bytes = stream.readNBytes(1_000_001)
-                        require(bytes.size <= 1_000_000) { "Список слишком большой" }
-                        bytes.decodeToString()
+                        SubscriptionManager.readList(stream)
                     }
                 }
                 // Base64, .txt-список, JSON и набор URI-ссылок разбирает один импортёр.

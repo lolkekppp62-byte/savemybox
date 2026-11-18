@@ -60,13 +60,45 @@ class Repository(context: Context) {
         // Пул ограничен: список и проверка не должны разрастаться бесконечно.
         // id — тег outbound у ядра, поэтому повторы не допускаются и здесь.
         val used = d.nodes.mapTo(HashSet(d.nodes.size * 2)) { it.id }
+        val usedNames = d.nodes.mapTo(HashSet()) { it.name }
         val fresh = nodes.map { node ->
             var id = node.id
             var index = 1
             while (!used.add(id)) { index++; id = "${node.id}#$index" }
-            node.copy(id = id)
+            val name = if (node.name.startsWith("Свой узел #")) {
+                var number = 1
+                while ("Свой узел #$number" in usedNames) number++
+                "Свой узел #$number"
+            } else node.name
+            usedNames.add(name)
+            node.copy(id = id, name = name)
         }
         d.copy(nodes = SubscriptionManager.capPool(d.nodes + fresh))
+    }
+    suspend fun editNode(id: String, name: String, source: String, mark: Mark, folderId: String?) = change { d ->
+        require(name.trim().isNotEmpty() && name.length <= 120) { "Название: от 1 до 120 символов" }
+        require(folderId == null || d.folders.any { it.id == folderId }) { "Папка удалена" }
+        val old = d.nodes.firstOrNull { it.id == id } ?: error("Узел удалён")
+        val next = if (source.trim() == old.source.ifBlank { old.outbound }) old
+            else Importer.parse(source, mark).also { require(it.size == 1) { "Вставьте ссылку одного узла" } }.single()
+        d.copy(nodes = d.nodes.map { if (it.id == id) next.copy(id = id, name = name.trim(), source = source.trim(), mark = mark, folderId = folderId, locallyEdited = true) else it })
+    }
+    suspend fun removeSubscription(id: String) = change { d ->
+        val remaining = d.nodes.filterNot { it.id.startsWith("$id::") }
+        d.copy(nodes = remaining, settings = d.settings.copy(
+            subscriptions = d.settings.subscriptions.filterNot { it.id == id },
+            selectedId = d.settings.selectedId?.takeIf { selected -> remaining.any { it.id == selected } }))
+    }
+    suspend fun addFolder(name: String) = change { d ->
+        require(name.trim().isNotEmpty() && name.length <= 120) { "Введите название папки (до 120 символов)" }
+        d.copy(folders = d.folders + NodeFolder(name = name.trim()))
+    }
+    /** Совмещение — группа для проверки и выбора, не цепочка и не сложение скоростей. */
+    suspend fun combine(ids: Set<String>, name: String) = change { d ->
+        require(ids.size in 2..25 && d.nodes.count { it.id in ids } == ids.size) { "Выберите от 2 до 25 существующих узлов" }
+        require(name.trim().isNotEmpty() && name.length <= 120) { "Введите название группы" }
+        val folder = NodeFolder(name = name.trim())
+        d.copy(folders = d.folders + folder, nodes = d.nodes.map { if (it.id in ids) it.copy(folderId = folder.id) else it })
     }
     suspend fun mark(id: String, mark: Mark) = change { d -> d.copy(nodes = d.nodes.map { if(it.id == id) it.copy(mark=mark) else it }) }
     suspend fun remove(id: String) = change { it.copy(nodes = it.nodes.filterNot { n -> n.id == id }) }
@@ -87,7 +119,8 @@ class Repository(context: Context) {
     /** Обновляет список узлов подписки: удаляет старые узлы этой подписки, добавляет свежие. */
     suspend fun addFromSubscription(subId: String, fresh: List<Node>) = change { d ->
         // Дедупликация по адрес+порт+протокол, лимит на подписку и уникальные id (теги ядра).
-        val tagged = subscriptionNodes(subId, SubscriptionManager.distinct(fresh))
+        if (d.settings.subscriptions.none { it.id == subId }) return@change d
+        val tagged = SubscriptionManager.reconcile(d.nodes.filter { it.id.startsWith("$subId::") }, subscriptionNodes(subId, SubscriptionManager.distinct(fresh)))
         val existing = d.nodes.filterNot { it.id.startsWith("$subId::") }
         d.copy(nodes = SubscriptionManager.capPool(existing + tagged))
     }

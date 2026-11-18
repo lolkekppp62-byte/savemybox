@@ -31,5 +31,5 @@ class MainActivity : ComponentActivity() {
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED) notification.launch(Manifest.permission.POST_NOTIFICATIONS)
         else startVpn()
     }
-    private fun startVpn() { runCatching { ContextCompat.startForegroundService(this,Intent(this,BoxVpnService::class.java)) }.onFailure { app.engine.message("Android не разрешил запуск VPN") } }
+    private fun startVpn() { runCatching { ContextCompat.startForegroundService(this,Intent(this,BoxVpnService::class.java)) }.onFailure { app.engine.message("Android не разрешил запуск VPN: ${com.savemy.singboxfork.core.Diagnostics.describe(it)}") } }
 }

@@ -13,6 +13,21 @@ class SubscriptionTest {
 
     private fun node() = Importer.parse("trojan://p@example.com:443#T").single()
 
+    @Test fun refreshPreservesLocalNameMarkAndFolder() {
+        val old = node().copy(id = "sub::T", name = "Мой узел", mark = Mark.BL, folderId = "folder")
+        val fresh = node().copy(id = "sub::T", name = "T")
+        val merged = SubscriptionManager.reconcile(listOf(old), listOf(fresh)).single()
+        assertEquals("Мой узел", merged.name)
+        assertEquals(Mark.BL, merged.mark)
+        assertEquals("folder", merged.folderId)
+        val edited = old.copy(outbound = old.outbound.replace("example.com", "edited.example"), locallyEdited = true)
+        assertEquals(edited, SubscriptionManager.reconcile(listOf(edited), listOf(fresh)).single())
+    }
+    @Test fun boundedReadWorksWithoutReadNBytes() {
+        assertEquals("список", SubscriptionManager.readList(java.io.ByteArrayInputStream("список".encodeToByteArray())))
+        assertTrue(runCatching { SubscriptionManager.readList(java.io.ByteArrayInputStream(ByteArray(1_000_001))) }.isFailure)
+    }
+
     @Test fun boxSourcesFallBackToSingleUrl() {
         // Старый бокс с одним полем url продолжает работать.
         assertEquals(listOf("https://a/list.txt"), Subscription(url = "https://a/list.txt").sources())

@@ -40,7 +40,10 @@ object ProbeUrls {
     const val APPLE = "https://captive.apple.com/hotspot-detect.html"
     const val FIREFOX = "https://detectportal.firefox.com/success.txt"
     val presets = listOf("Google" to GOOGLE, "Cloudflare" to CLOUDFLARE, "Apple" to APPLE, "Firefox" to FIREFOX)
-    fun valid(url: String) = url.trim().startsWith("https://")
+    fun valid(url: String) = runCatching {
+        val uri = java.net.URI(url.trim())
+        uri.scheme.equals("https", true) && !uri.host.isNullOrBlank() && uri.rawUserInfo == null && (uri.port == -1 || uri.port in 1..65535)
+    }.getOrDefault(false)
     /** Пустое или некорректное значение не ломает проверку: берём Google. */
     fun choose(url: String) = url.trim().takeIf(::valid) ?: GOOGLE
     fun label(url: String) = presets.firstOrNull { it.second == url.trim() }?.first ?: "Свой"

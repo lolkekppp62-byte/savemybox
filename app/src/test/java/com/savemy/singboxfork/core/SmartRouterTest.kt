@@ -10,6 +10,13 @@ class SmartRouterTest {
     private fun node(id: String, latency: Long?, status: CheckStatus) =
         Node(id = id, name = id, outbound = "{}", latencyMs = latency, status = status)
 
+    @Test fun fullScanRequiresProxyAndAllowedAliveNode() {
+        val values = listOf(node("blocked", 1, CheckStatus.ALIVE), node("fast", 20, CheckStatus.ALIVE), node("slow", 80, CheckStatus.ALIVE), node("failed", 2, CheckStatus.URL_FAILED))
+        assertNull(SmartRouter.bestChecked(values, setOf("fast", "slow"), false))
+        assertEquals("fast", SmartRouter.bestChecked(values, setOf("fast", "slow", "failed"), true)?.id)
+        assertNull(SmartRouter.bestChecked(values, emptySet(), true))
+    }
+
     @Test fun healthyActiveIsKept() {
         assertNull(SmartRouter.bestFallback(node("a", 40, CheckStatus.ALIVE), listOf(node("b", 10, CheckStatus.ALIVE))))
     }
