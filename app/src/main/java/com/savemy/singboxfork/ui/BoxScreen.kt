@@ -150,6 +150,7 @@ import java.util.Date
                         onScan = { scan() },
                         onServers = { sheet = true },
                         onRefreshSubs = { refreshSubscriptions(context, app) },
+                        onRefreshSource = { id, url -> action { SubscriptionWorker.refreshNow(context, id, url) } },
                         onCheckMode = { mode -> action { app.repository.updateSettings { it.copy(checkMode = mode) } } },
                         onCheckNode = { id -> scan(id) },
                         probeChange = { transform -> action { app.repository.updateSettings(transform) } },
@@ -161,7 +162,8 @@ import java.util.Date
                                 onEdit = { node, name, source, mark, folder -> action { app.repository.editNode(node.id, name, source, mark, folder); app.engine.applySettings() } },
                                 onFolder = { name -> action { app.repository.addFolder(name) } },
                                 onCombine = { links, name, mark -> action { app.repository.combine(links, name, mark); app.engine.applySettings() } },
-                                onRefreshAll = { refreshSubscriptions(context, app) })
+                                onRefreshAll = { action { SubscriptionWorker.refreshAllNow(context, app.repository.state.value.settings.subscriptions); app.journal.add("Обновление всех боксов") } },
+                                onRefreshSource = { id, url -> action { SubscriptionWorker.refreshNow(context, id, url) } })
                         })
                     else SettingsScreen(data, change = { transform ->
                         action {
@@ -227,6 +229,7 @@ import java.util.Date
                                 checking: Boolean, loadError: String?, onToggle: () -> Unit, onScan: () -> Unit,
                                 onServers: () -> Unit, onRefreshSubs: () -> Unit, onCheckMode: (CheckMode) -> Unit,
                                 onCheckNode: (String) -> Unit, probeChange: ((Settings) -> Settings) -> Unit,
+                                onRefreshSource: (String, String) -> Unit,
                                 nodesContent: @Composable () -> Unit) {
     // Когда VPN выключен, activeId пуст: показываем выбранный узел из настроек, а не «не выбран».
     val active = data.nodes.firstOrNull { it.id == connection.activeId }
@@ -242,7 +245,7 @@ import java.util.Date
         ProbePanel(data.settings, probeChange)
         nodesContent()
         NodePlate(active, live[active?.id], connected, checking, onServers, onCheckNode, data.settings.pingDisplay, data.settings.probeMethod)
-        SubscriptionCard(sub, subNodes, onRefreshSubs, onServers)
+        SubscriptionCard(sub, subNodes, onRefreshSubs, onServers, onRefreshSource)
         if (checking) ProgressStrip(progress, data.settings.probeMethod)
         connection.notice?.let { Text(it, color = Palette.Cyan, style = MaterialTheme.typography.bodyMedium) }
         loadError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -382,7 +385,9 @@ private fun speedText(bytesPerSecond: Long): String = when {
     else -> "$bytesPerSecond Б/с"
 }
 
-@Composable private fun SubscriptionCard(sub: Subscription?, nodeCount: Int, onRefresh: () -> Unit, onOpen: () -> Unit) {
+@Composable private fun SubscriptionCard(sub: Subscription?, nodeCount: Int, onRefresh: () -> Unit, onOpen: () -> Unit,
+                                        onRefreshSource: (String, String) -> Unit = { _, _ -> }) {
+    var linksMenu by remember(sub?.id) { mutableStateOf(false) }
     Surface(shape = Palette.CardShape, color = Palette.CardFill, border = BorderStroke(1.dp, Palette.CardStroke), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -394,6 +399,15 @@ private fun speedText(bytesPerSecond: Long): String = when {
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (sub != null) IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Обновить подписку", tint = Palette.Cyan) }
+            if (sub != null && sub.sources().size > 1) Box {
+                TextButton({ linksMenu = true }) { Text("Ссылка", color = Palette.Cyan) }
+                DropdownMenu(expanded = linksMenu, onDismissRequest = { linksMenu = false }) {
+                    sub.sources().forEach { url ->
+                        DropdownMenuItem(text = { Text(url, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            onClick = { linksMenu = false; onRefreshSource(sub.id, url) })
+                    }
+                }
+            }
             TextButton(onClick = onOpen) { Text("Все", color = Palette.Cyan) }
         }
     }

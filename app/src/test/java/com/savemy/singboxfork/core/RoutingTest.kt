@@ -86,12 +86,21 @@ class RoutingTest {
         }
     }
 
-    @Test fun bootstrapDnsDetoursThroughDirectOutbound() {
+    @Test fun bootstrapDnsHasNoExplicitDirectDetour() {
         val cfg = config(RoutingProfile())
         val bootstrap = cfg["dns"]!!.jsonObject["servers"]!!.jsonArray.first().jsonObject
         assertEquals("bootstrap", bootstrap["tag"]!!.jsonPrimitive.content)
-        assertEquals("direct", bootstrap["detour"]!!.jsonPrimitive.content)
+        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals("1.1.1.1", bootstrap["server"]!!.jsonPrimitive.content)
+        // Явный detour на пустой direct ядро отвергает: «detour to an empty direct outbound makes no sense».
+        assertNull(bootstrap["detour"])
         assertEquals("direct", cfg["outbounds"]!!.jsonArray.first { it.jsonObject["tag"]?.jsonPrimitive?.content == "direct" }.jsonObject["type"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun remoteDnsStillDetoursThroughProxy() {
+        val dns = config(RoutingProfile())["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+        val remote = dns.first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
     }
 
     @Test fun noRuleSetsWithoutDirectory() {

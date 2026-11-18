@@ -21,8 +21,10 @@ import com.savemy.singboxfork.data.*
                          onEdit: (Node, String, String, Mark, String?) -> Unit,
                          onDelete: (Node) -> Unit, onSelect: (Node) -> Unit, onCheck: (String) -> Unit,
                          onCheckGroup: (Set<String>) -> Unit,
-                         onRefreshAll: () -> Unit = {}) {
+                         onRefreshAll: () -> Unit = {},
+                         onRefreshSource: (String, String) -> Unit = { _, _ -> }) {
     var addMenu by remember { mutableStateOf(false) }
+    var refreshLinks by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Node?>(null) }
     var deleting by remember { mutableStateOf<Node?>(null) }
     var folderDialog by remember { mutableStateOf(false) }
@@ -34,6 +36,8 @@ import com.savemy.singboxfork.data.*
     var localOpen by remember { mutableStateOf(false) }
     var opened by remember { mutableStateOf<Set<String>>(emptySet()) }
     val local = data.nodes.filter { node -> data.folders.none { it.id == node.folderId } }
+    // Обновление ссылок доступно только когда есть включённый бокс с адресами.
+    val hasLinks = data.settings.subscriptions.any { it.enabled && it.sources().isNotEmpty() }
     val linkCount = links.lines().count { it.isNotBlank() }
     val draw: @Composable (Node) -> Unit = { node ->
         var expanded by remember(node.id) { mutableStateOf(false) }
@@ -78,11 +82,26 @@ import com.savemy.singboxfork.data.*
         if (localOpen) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton({ onCheckGroup(local.map { it.id }.toSet()) }, enabled = !checking && local.isNotEmpty()) { Text("Проверить") }
-                TextButton(onClick = onRefreshAll, enabled = data.settings.subscriptions.any { it.enabled && it.sources().isNotEmpty() }) { Text("Обновить всё") }
+                TextButton(onClick = onRefreshAll, enabled = hasLinks) { Text("Обновить всё") }
+                TextButton(onClick = { refreshLinks = true }, enabled = hasLinks) { Text("Обновить ссылку") }
             }
             local.forEach { key(it.id) { draw(it) } }
         }
     }
+    if (refreshLinks) AlertDialog(onDismissRequest = { refreshLinks = false },
+        title = { Text("Обновить одну ссылку") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Скачивается только выбранная ссылка: узлы остальных ссылок бокса остаются как были.", style = MaterialTheme.typography.bodySmall)
+            data.settings.subscriptions.filter { it.enabled && it.sources().isNotEmpty() }.forEach { sub ->
+                Text(sub.name.ifBlank { "Бокс" }, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 8.dp))
+                sub.sources().forEach { url ->
+                    TextButton({ refreshLinks = false; onRefreshSource(sub.id, url) }) {
+                        Text(url, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        } },
+        confirmButton = { TextButton({ refreshLinks = false }) { Text("Закрыть") } })
     deleting?.let { node ->
         AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Ты точно хочешь удалить этот узел?") }, text = { Text(node.name) },
             confirmButton = { TextButton({ deleting = null; onDelete(node) }) { Text("Удалить") } },

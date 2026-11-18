@@ -66,9 +66,11 @@ object ConfigFactory {
             put("log", buildJsonObject { put("level", "warn"); put("timestamp", true); put("output", spec.logPath) })
             put("dns", buildJsonObject {
                 put("servers", buildJsonArray {
-                    // IP-адрес bootstrap не требует разрешения имени; detour на direct обязателен —
-                    // без него sing-box 1.11+ выдаёт «detour to an empty direct outbound makes no sense».
-                    add(buildJsonObject { put("type", "udp"); put("tag", "bootstrap"); put("server", "1.1.1.1"); put("detour", "direct") })
+                    // IP-адрес bootstrap не требует разрешения имени. detour здесь указывать нельзя:
+                    // в новой форме DNS-серверов sing-box 1.12+ собственный dialer и так равен пустому
+                    // direct, а явный detour на direct ядро отвергает фатально — «detour to an empty
+                    // direct outbound makes no sense» — и VPN не запускается вовсе.
+                    add(buildJsonObject { put("type", "udp"); put("tag", "bootstrap"); put("server", "1.1.1.1") })
                     add(buildJsonObject { put("type", "https"); put("tag", "remote"); put("server", "1.1.1.1"); put("path", "/dns-query"); put("detour", "proxy") })
                 }); put("final", "remote")
             })
