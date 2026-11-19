@@ -1,9 +1,19 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+// Читаем local.properties — там хранятся пути и пароли от production keystore.
+// Файл не коммитится в git (см. .gitignore), поэтому секреты не утекают в репозиторий.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.savemy.singboxfork"
     compileSdk = 35
@@ -11,17 +21,16 @@ android {
         applicationId = "com.savemy.singboxfork"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
+        versionCode = 10
         versionName = "0.3.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // В APK только arm64-v8a: полный набор ABI весит ~350 МБ и часто качается
         // на телефон неполностью, а установщик затем пишет о проблеме с файлом.
         ndk { abiFilters += listOf("arm64-v8a") }
     }
-    // Общий ключ для всех сборок, включая CI. Без него Gradle создаёт на каждом раннере
-    // новый debug-ключ, и очередной APK не ставится поверх предыдущего ("Не удалось
-    // установить приложение"). Ключ дебажный, не для публикации в магазинах.
     signingConfigs {
+        // Debug-ключ: общий для всех разработчиков, лежит в репозитории.
+        // CI и локальные debug-сборки ставятся поверх друг друга.
         create("shared") {
             storeFile = file("debug.keystore")
             storePassword = "android"
@@ -31,15 +40,30 @@ android {
             enableV2Signing = true
             enableV3Signing = true
         }
+        // Production-ключ: читается из local.properties, которого нет в git.
+        // Если переменные не заданы — конфиг не создаётся и release-сборка упадёт явно.
+        val storeFilePath = localProps.getProperty("RELEASE_STORE_FILE")
+        if (storeFilePath != null) {
+            create("release") {
+                storeFile = file(storeFilePath)
+                storePassword = localProps.getProperty("RELEASE_STORE_PASSWORD") ?: ""
+                keyAlias = localProps.getProperty("RELEASE_KEY_ALIAS") ?: ""
+                keyPassword = localProps.getProperty("RELEASE_KEY_PASSWORD") ?: ""
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
     buildTypes {
         debug { signingConfig = signingConfigs.getByName("shared") }
-        // Выпуск собирается тем же ключом, что и отладочная сборка: обновление ставится
-        // поверх, а в APK нет флага debuggable — на него Play Protect жалуется заметно реже.
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("shared")
+            // Production-ключ, если настроен локально; иначе общий ключ из репозитория
+            // (в CI local.properties нет, и сборка не должна из-за этого падать).
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("shared")
         }
     }
     buildFeatures { compose = true; buildConfig = true }

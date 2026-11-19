@@ -17,8 +17,6 @@ import com.savemy.singboxfork.BuildConfig
 import com.savemy.singboxfork.core.UpdateState
 import com.savemy.singboxfork.core.Updater
 import com.savemy.singboxfork.data.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable fun SettingsScreen(data:AppData,change:((Settings)->Settings)->Unit,openApps:()->Unit,openRussian:()->Unit,openSubscriptions:()->Unit,openLogs:()->Unit,updater:Updater,context: Context,onRoamNow:()->Unit,onConnectVpn:()->Unit) {
@@ -145,13 +143,28 @@ import kotlinx.coroutines.withContext
                 is UpdateState.Available -> {
                     Text("Доступна версия ${st.release.version}",style=MaterialTheme.typography.titleSmall)
                     if(st.release.notes.isNotBlank()) Text(st.release.notes.take(280),style=MaterialTheme.typography.bodySmall)
-                    Button({ updater.open(st.release) },Modifier.fillMaxWidth()) { Text("Скачать ${st.release.version} в браузере") }
+                    val sizeMb = if(st.release.sizeBytes > 0) " · %.1f МБ".format(st.release.sizeBytes / 1_048_576f) else ""
+                    Button({ updater.download(st.release) },Modifier.fillMaxWidth()) { Text("Обновить до ${st.release.version}$sizeMb") }
+                    TextButton({ updater.openInBrowser() },Modifier.fillMaxWidth()) { Text("Открыть в браузере") }
                 }
-                is UpdateState.Failed -> Text(st.message,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+                is UpdateState.Downloading -> {
+                    Text("Скачивание ${st.release.version}…",style=MaterialTheme.typography.titleSmall)
+                    if(st.progress != null) {
+                        LinearProgressIndicator(progress={ st.progress / 100f },modifier=Modifier.fillMaxWidth())
+                        Text("${st.progress}%",style=MaterialTheme.typography.bodySmall)
+                    } else {
+                        LinearProgressIndicator(modifier=Modifier.fillMaxWidth())
+                        Text("Скачиваем…",style=MaterialTheme.typography.bodySmall)
+                    }
+                }
+                is UpdateState.Failed -> {
+                    Text(st.message,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+                    TextButton({ updater.openInBrowser() },Modifier.fillMaxWidth()) { Text("Открыть страницу релизов") }
+                }
                 UpdateState.Idle -> Unit
             }
-            OutlinedButton({ updater.check(s.updateChannel) },Modifier.fillMaxWidth(),enabled = update !is UpdateState.Checking) { Text("Проверить обновление") }
-            Text("Откроется страница выпуска на GitHub: APK скачает и установит браузер. Приложению больше не нужно право устанавливать пакеты — именно оно и вызывало предупреждение Play Protect.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton({ updater.check(s.updateChannel) },Modifier.fillMaxWidth(),enabled = update !is UpdateState.Checking && update !is UpdateState.Downloading) { Text("Проверить обновление") }
+            Text("APK скачивается прямо в приложении и запускает системный установщик — браузер не нужен.",style=MaterialTheme.typography.bodySmall)
         } }
         item { OutlinedButton(openLogs,Modifier.fillMaxWidth()) { Text("Журнал соединений и проверок") };Text("Савеми Бокс · sing-box 1.14.4",style=MaterialTheme.typography.labelMedium) }
     }

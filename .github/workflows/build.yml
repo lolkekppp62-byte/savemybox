@@ -23,9 +23,10 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with: { name: app-release, path: app/build/outputs/apk/release/app-release.apk }
-      # Приложение обновляет себя прямо из GitHub Releases: APK кладётся туда же,
-      # версия берётся из versionName. Предварительными помечаются только 0.0.* —
-      # их получает бета-канал; обычный выпуск виден и стабильному каналу.
+      # Приложение обновляется из GitHub Releases: APK кладётся туда же, версия берётся
+      # из versionName. Линия 0.3.* и legacy 0.0.* помечаются prerelease — их получает
+      # бета-канал; стабильный канал такие выпуски не предлагает.
+      # Повторная сборка уже выпущенной версии обновляет её APK на месте.
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -35,14 +36,18 @@ jobs:
           APK=app/build/outputs/apk/release/app-release.apk
           ls -la "$APK"
           sha256sum "$APK"
-          EXTRA=""
-          case "$VER" in 0.0.*|0.3.4) EXTRA="--prerelease" ;; esac
+          NOTES="Сборка $VER. Обновление ставится из приложения: Настройки → Обновления."
+          PRE_FLAG=""
+          case "$VER" in 0.0.*|0.3.*) PRE_FLAG="--prerelease" ;; esac
           if gh release view "v$VER" >/dev/null 2>&1; then
-            echo "Версия v$VER уже опубликована. Увеличьте versionName/versionCode; APK не перезаписывается."
-            exit 1
+            # Старые ассеты удаляются через API, чтобы в релизе оставался ровно один APK.
+            REL_ID=$(gh api "repos/{owner}/{repo}/releases/tags/v$VER" --jq .id)
+            for id in $(gh api "repos/{owner}/{repo}/releases/$REL_ID/assets" --jq '.[].id'); do
+              gh api -X DELETE "repos/{owner}/{repo}/releases/assets/$id"
+            done
+            gh release upload "v$VER" "$APK#SaveMyBox-$VER.apk" --clobber
+            gh release edit "v$VER" --title "$VER" --notes "$NOTES" $PRE_FLAG
           else
             gh release create "v$VER" "$APK#SaveMyBox-$VER.apk" \
-              --title "$VER" \
-              --notes "Сборка $VER. Обновление ставится из приложения: Настройки → Обновления." \
-              $EXTRA
+              --title "$VER" --notes "$NOTES" $PRE_FLAG
           fi
